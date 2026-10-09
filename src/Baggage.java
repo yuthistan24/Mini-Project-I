@@ -19,11 +19,15 @@ enum PassengerCategory {
 
 enum BaggageStatus {
     REGISTERED,
-    ASSIGNED,
-    WAITING_CLEARANCE,
+    WAITING_FOR_ASSIGNMENT,
+    WAITING_FOR_CLEARANCE,
     CLEARED,
-    IN_TRANSIT,
-    LOADED
+    QUEUED,
+    ROUTING,
+    REROUTED,
+    LOADED,
+    MISSED_CUTOFF,
+    NO_ROUTE_AVAILABLE
 }
 
 public abstract class Baggage {
@@ -79,7 +83,7 @@ public abstract class Baggage {
 
     public void setOperatorClearance(boolean operatorClearance) {
         this.operatorClearance = operatorClearance;
-        if (operatorClearance && this.status == BaggageStatus.WAITING_CLEARANCE) {
+        if (operatorClearance && this.status == BaggageStatus.WAITING_FOR_CLEARANCE) {
             this.status = BaggageStatus.CLEARED;
         }
     }
@@ -95,8 +99,8 @@ public abstract class Baggage {
     public void assignFlight(Flight flight) {
         this.assignedFlight = flight;
         this.loadingCutoff = flight.getLoadingCutoff();
-        if (this.status == BaggageStatus.REGISTERED) {
-            this.status = BaggageStatus.ASSIGNED;
+        if (this.status == BaggageStatus.REGISTERED || this.status == BaggageStatus.WAITING_FOR_ASSIGNMENT) {
+            this.status = BaggageStatus.WAITING_FOR_CLEARANCE;
         }
     }
 

@@ -3,6 +3,8 @@
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.PriorityQueue;
+import java.util.Collections;
 
 class ConveyorSegment {
     private String fromNode;
@@ -39,7 +41,32 @@ class ConveyorSegment {
 
     @Override
     public String toString() {
-        return fromNode + " -> " + toNode + " (" + processingTime + " min)";
+        return fromNode + " -> " + toNode + " (" + processingTime + " min)" + (available ? "" : " [UNAVAILABLE]");
+    }
+}
+
+class DijkstraNode implements Comparable<DijkstraNode> {
+    String name;
+    int dist;
+
+    public DijkstraNode(String name, int dist) {
+        this.name = name;
+        this.dist = dist;
+    }
+
+    @Override
+    public int compareTo(DijkstraNode other) {
+        return Integer.compare(this.dist, other.dist);
+    }
+}
+
+class RoutingResult {
+    public ArrayList<String> route;
+    public int totalTime;
+    
+    public RoutingResult(ArrayList<String> route, int totalTime) {
+        this.route = route;
+        this.totalTime = totalTime;
     }
 }
 
@@ -48,21 +75,26 @@ class ConveyorRoutePlanner {
 
     public ConveyorRoutePlanner() {
         adjacencyList = new HashMap<>();
-        initializeNetwork();
     }
-
-    private void initializeNetwork() {
-        // Create 8-10 nodes
+    
+    public void addSegmentFromDB(String from, String to, int time, boolean available) {
+        adjacencyList.putIfAbsent(from, new ArrayList<>());
+        adjacencyList.putIfAbsent(to, new ArrayList<>());
+        ConveyorSegment segment = new ConveyorSegment(from, to, time);
+        segment.setAvailable(available);
+        adjacencyList.get(from).add(segment);
+    }
+    
+    public void initializeNetwork() {
         String[] nodes = {
             "CHECK-IN", "SORTING", "TRANSFER-A", "TRANSFER-B", 
             "CENTRAL", "BAY-AREA", "BAY-A", "BAY-B", "BAY-C", "BAY-D"
         };
 
         for (String node : nodes) {
-            adjacencyList.put(node, new ArrayList<>());
+            adjacencyList.putIfAbsent(node, new ArrayList<>());
         }
 
-        // Add directed edges
         addSegment("CHECK-IN", "SORTING", 4);
         addSegment("SORTING", "TRANSFER-A", 5);
         addSegment("SORTING", "TRANSFER-B", 6);
@@ -78,9 +110,8 @@ class ConveyorRoutePlanner {
 
     private void addSegment(String from, String to, int time) {
         ConveyorSegment segment = new ConveyorSegment(from, to, time);
-        if (adjacencyList.containsKey(from)) {
-            adjacencyList.get(from).add(segment);
-        }
+        adjacencyList.get(from).add(segment);
+        DatabaseManager.saveConveyorSegment(segment);
     }
 
     public void displayNetwork() {
@@ -92,20 +123,84 @@ class ConveyorRoutePlanner {
             }
         }
     }
-
-    // Method for Review 2 - Dijkstra will be implemented here later
-    public ArrayList<String> getShortestPath(String startNode, String endNode) {
-        System.out.println("Notice: Shortest-path routing will be implemented in Review 2.");
-        System.out.println("Returning a simple direct representation for now.");
-        
-        // Faking a simple path display for Review 1, not Dijkstra
-        ArrayList<String> simpleRoute = new ArrayList<>();
-        simpleRoute.add(startNode);
-        if (!startNode.equals("BAY-AREA") && !startNode.equals(endNode)) {
-            simpleRoute.add("CENTRAL");
-            simpleRoute.add("BAY-AREA");
+    
+    public boolean markConveyorUnavailable(String from, String to) {
+        if (adjacencyList.containsKey(from)) {
+            for (ConveyorSegment edge : adjacencyList.get(from)) {
+                if (edge.getToNode().equals(to)) {
+                    edge.setAvailable(false);
+                    DatabaseManager.saveConveyorSegment(edge);
+                    return true;
+                }
+            }
         }
-        simpleRoute.add(endNode);
-        return simpleRoute;
+        return false;
+    }
+    
+    public boolean restoreConveyor(String from, String to) {
+        if (adjacencyList.containsKey(from)) {
+            for (ConveyorSegment edge : adjacencyList.get(from)) {
+                if (edge.getToNode().equals(to)) {
+                    edge.setAvailable(true);
+                    DatabaseManager.saveConveyorSegment(edge);
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // Dijkstra's Algorithm
+    public RoutingResult getShortestPath(String startNode, String endNode) {
+        if (!adjacencyList.containsKey(startNode) || !adjacencyList.containsKey(endNode)) {
+            return null;
+        }
+
+        HashMap<String, Integer> distances = new HashMap<>();
+        HashMap<String, String> predecessors = new HashMap<>();
+        PriorityQueue<DijkstraNode> pq = new PriorityQueue<>();
+
+        for (String node : adjacencyList.keySet()) {
+            distances.put(node, Integer.MAX_VALUE);
+        }
+
+        distances.put(startNode, 0);
+        pq.add(new DijkstraNode(startNode, 0));
+
+        while (!pq.isEmpty()) {
+            DijkstraNode current = pq.poll();
+            String u = current.name;
+
+            if (u.equals(endNode)) break;
+
+            if (current.dist > distances.get(u)) continue;
+
+            for (ConveyorSegment edge : adjacencyList.get(u)) {
+                if (!edge.isAvailable()) continue; // Skip unavailable segments
+                
+                String v = edge.getToNode();
+                int weight = edge.getProcessingTime();
+                
+                if (distances.get(u) != Integer.MAX_VALUE && distances.get(u) + weight < distances.get(v)) {
+                    distances.put(v, distances.get(u) + weight);
+                    predecessors.put(v, u);
+                    pq.add(new DijkstraNode(v, distances.get(v)));
+                }
+            }
+        }
+
+        if (distances.get(endNode) == Integer.MAX_VALUE) {
+            return null; // No route found
+        }
+
+        ArrayList<String> route = new ArrayList<>();
+        String curr = endNode;
+        while (curr != null) {
+            route.add(curr);
+            curr = predecessors.get(curr);
+        }
+        Collections.reverse(route);
+        
+        return new RoutingResult(route, distances.get(endNode));
     }
 }
