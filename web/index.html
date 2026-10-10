@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vaanam Airport — Intelligent Baggage Handling & Routing System</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app-container">
+
+        <!-- ==================== LOGIN SCREEN ==================== -->
+        <div id="login-screen" class="auth-screen active">
+            <div class="auth-card">
+                <div class="airport-brand">
+                    <div class="brand-icon">✈</div>
+                    <h2>Vaanam Airport</h2>
+                    <p class="brand-tagline">Intelligent Baggage Handling & Routing System</p>
+                </div>
+
+                <div class="auth-form">
+                    <h3>Staff Portal Login</h3>
+                    <div class="form-group">
+                        <label for="username">Username</label>
+                        <input type="text" id="username" placeholder="Enter username" autocomplete="username">
+                    </div>
+                    <div class="form-group">
+                        <label for="password">Password</label>
+                        <div class="password-wrapper">
+                            <input type="password" id="password" placeholder="Enter password" autocomplete="current-password">
+                            <button type="button" class="toggle-password" id="toggle-password" title="Show/Hide Password">👁</button>
+                        </div>
+                    </div>
+                    <button id="login-btn" class="btn btn-primary btn-block">
+                        <span class="btn-text">Sign In</span>
+                        <span class="btn-spinner" style="display:none;">⏳</span>
+                    </button>
+                    <div id="login-error" class="alert-box alert-error" style="display: none;"></div>
+
+                    <div class="auth-footer">
+                        <span class="subtext">Initial administrator or new account setup?</span>
+                        <a href="#" id="show-register-link">Admin Account Provisioning</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== REGISTRATION SCREEN ==================== -->
+        <div id="register-screen" class="auth-screen">
+            <div class="auth-card">
+                <div class="airport-brand">
+                    <div class="brand-icon">🔐</div>
+                    <h2>Vaanam Airport</h2>
+                    <p class="brand-tagline">Authorized Account Provisioning</p>
+                </div>
+
+                <div class="auth-form">
+                    <div class="alert-box alert-info">
+                        <strong>Policy:</strong> Initial system setup allows first-time Admin creation. Subsequent accounts require authorized Administrator login.
+                    </div>
+
+                    <div class="form-group">
+                        <label for="reg-username">Username</label>
+                        <input type="text" id="reg-username" placeholder="New staff username">
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-password">Initial Password</label>
+                        <input type="password" id="reg-password" placeholder="Create strong password">
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-confirm">Confirm Password</label>
+                        <input type="password" id="reg-confirm" placeholder="Re-enter password">
+                    </div>
+                    <div class="form-group">
+                        <label for="reg-role">Role Assignment</label>
+                        <select id="reg-role">
+                            <option value="ADMIN">ADMIN — Full System & User Control</option>
+                            <option value="SUPERVISOR">SUPERVISOR — Flight & Conveyor Ops</option>
+                            <option value="BAGGAGE_OPERATOR" selected>BAGGAGE_OPERATOR — Check-in & Queue Processing</option>
+                            <option value="SECURITY_OFFICER">SECURITY_OFFICER — Screening & Clearance</option>
+                            <option value="AUDITOR">AUDITOR — Read-only Compliance & Logs</option>
+                        </select>
+                    </div>
+
+                    <button id="register-btn" class="btn btn-primary btn-block">Provision Account</button>
+                    <div id="register-error" class="alert-box alert-error" style="display:none;"></div>
+                    <div id="register-success" class="alert-box alert-success" style="display:none;"></div>
+                    <button type="button" id="back-to-login-btn" class="btn btn-secondary btn-block mt-2">Back to Login</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MAIN DASHBOARD APPLICATION ==================== -->
+        <div id="dashboard-screen" class="dashboard-layout">
+            
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <div class="sidebar-logo">✈ Vaanam Ops</div>
+                    <div class="user-badge-card">
+                        <div class="user-avatar" id="avatar-initials">AD</div>
+                        <div class="user-meta">
+                            <div class="user-name" id="current-user-name">Administrator</div>
+                            <div class="user-role-tag" id="current-user-role">ADMIN</div>
+                        </div>
+                    </div>
+                </div>
+
+                <nav class="sidebar-nav">
+                    <ul class="nav-menu">
+                        <li><a href="#" class="nav-item active" data-target="dashboard"><span class="nav-icon">📊</span> Dashboard</a></li>
+                        <li><a href="#" class="nav-item" data-target="baggage"><span class="nav-icon">🧳</span> Baggage Ops</a></li>
+                        <li><a href="#" class="nav-item" data-target="flights"><span class="nav-icon">🛫</span> Flights & Bays</a></li>
+                        <li><a href="#" class="nav-item" data-target="conveyors"><span class="nav-icon">⚙️</span> Conveyor Network</a></li>
+                        <li id="nav-item-security"><a href="#" class="nav-item" data-target="security"><span class="nav-icon">🛡️</span> Security Clearance</a></li>
+                        <li id="nav-item-users"><a href="#" class="nav-item" data-target="users"><span class="nav-icon">👥</span> Users & Audit</a></li>
+                    </ul>
+                </nav>
+
+                <div class="sidebar-footer">
+                    <button id="logout-btn" class="btn btn-danger btn-block"><span class="nav-icon">🚪</span> Logout</button>
+                </div>
+            </aside>
+
+            <!-- Main Workspace -->
+            <main class="main-content">
+                <!-- Top Header Bar -->
+                <header class="topbar">
+                    <div class="topbar-left">
+                        <h2 class="view-title" id="page-heading">Airport Operations Dashboard</h2>
+                    </div>
+                    <div class="topbar-right">
+                        <div class="clock-display" title="Simulated Operations Clock">
+                            <span class="clock-icon">🕒</span>
+                            <span class="clock-label">Simulated Clock:</span>
+                            <strong id="simulated-clock-time">09:00 AM</strong>
+                        </div>
+                        <button id="advance-clock-btn" class="btn btn-sm btn-outline" title="Advance simulated operations clock">+15 Mins</button>
+                    </div>
+                </header>
+
+                <div class="view-container">
+
+                    <!-- ==================== VIEW: DASHBOARD ==================== -->
+                    <section id="view-dashboard" class="content-view active">
+                        <div class="metrics-grid">
+                            <div class="metric-card metric-navy">
+                                <div class="metric-icon">🧳</div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Total Baggage</span>
+                                    <h3 class="metric-value" id="dash-stat-total">0</h3>
+                                    <span class="metric-sub">Real database records</span>
+                                </div>
+                            </div>
+                            <div class="metric-card metric-amber">
+                                <div class="metric-icon">🛡️</div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Awaiting Clearance</span>
+                                    <h3 class="metric-value" id="dash-stat-clearance">0</h3>
+                                    <span class="metric-sub">Requires security screening</span>
+                                </div>
+                            </div>
+                            <div class="metric-card metric-blue">
+                                <div class="metric-icon">⏳</div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Queued for Conveyors</span>
+                                    <h3 class="metric-value" id="dash-stat-queued">0</h3>
+                                    <span class="metric-sub">Priority queue routing</span>
+                                </div>
+                            </div>
+                            <div class="metric-card metric-green">
+                                <div class="metric-icon">✅</div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Loaded / Claimed</span>
+                                    <h3 class="metric-value" id="dash-stat-loaded">0</h3>
+                                    <span class="metric-sub">Successfully processed</span>
+                                </div>
+                            </div>
+                            <div class="metric-card metric-red">
+                                <div class="metric-icon">⚠️</div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Missed Cutoff</span>
+                                    <h3 class="metric-value" id="dash-stat-missed">0</h3>
+                                    <span class="metric-sub">Cutoff violated (not loaded)</span>
+                                </div>
+                            </div>
+                            <div class="metric-card metric-teal">
+                                <div class="metric-icon">⚡</div>
+                                <div class="metric-info">
+                                    <span class="metric-label">Conveyor Availability</span>
+                                    <h3 class="metric-value" id="dash-stat-conveyors">0 / 0</h3>
+                                    <span class="metric-sub">Operational segments</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Dashboard Split View -->
+                        <div class="dashboard-split">
+                            <div class="panel">
+                                <div class="panel-header">
+                                    <h3>Active Flights & Loading Bays</h3>
+                                    <button class="btn btn-sm btn-outline" id="dash-view-all-flights">View All</button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="data-table" id="dash-flights-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Flight ID</th>
+                                                <th>Destination</th>
+                                                <th>Loading Cutoff</th>
+                                                <th>Assigned Bay</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <!-- Dynamically populated -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="panel">
+                                <div class="panel-header">
+                                    <h3>Recent Operational Audit Events</h3>
+                                    <button class="btn btn-sm btn-outline" id="dash-view-all-audit">View Logs</button>
+                                </div>
+                                <div class="table-responsive">
+                                    <table class="data-table" id="dash-audit-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Time</th>
+                                                <th>User</th>
+                                                <th>Action</th>
+                                                <th>Result</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <!-- Dynamically populated -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: BAGGAGE OPS ==================== -->
+                    <section id="view-baggage" class="content-view">
+                        <div class="action-bar">
+                            <div class="filter-group">
+                                <button class="filter-tab active" data-filter="ALL">All Baggage</button>
+                                <button class="filter-tab" data-filter="OUTGOING">Outgoing (Outbound)</button>
+                                <button class="filter-tab" data-filter="INCOMING">Incoming (Inbound)</button>
+                                <button class="filter-tab" data-filter="TRANSFER">Transfer (Connecting)</button>
+                                <button class="filter-tab" data-filter="CLEARANCE">Awaiting Clearance</button>
+                            </div>
+                            <div class="action-buttons">
+                                <button id="btn-open-register-bag" class="btn btn-primary">+ Register Baggage</button>
+                                <button id="btn-process-next-bag" class="btn btn-success">▶ Process Next Queued Bag</button>
+                            </div>
+                        </div>
+
+                        <div class="search-bar">
+                            <input type="text" id="baggage-search-input" placeholder="🔍 Search by Baggage ID (e.g. B001, B002)...">
+                            <button id="baggage-refresh-btn" class="btn btn-sm btn-outline">🔄 Refresh</button>
+                        </div>
+
+                        <div class="panel">
+                            <div class="table-responsive">
+                                <table class="data-table" id="baggage-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Bag ID</th>
+                                            <th>Type / Flow</th>
+                                            <th>Category</th>
+                                            <th>Flight ID</th>
+                                            <th>Current Node</th>
+                                            <th>Destination</th>
+                                            <th>Cutoff</th>
+                                            <th>Clearance</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="baggage-table-body">
+                                        <!-- Dynamically populated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: FLIGHTS & BAYS ==================== -->
+                    <section id="view-flights" class="content-view">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Scheduled Flights & Assigned Loading Bays</h3>
+                                <span class="subtext">Supervisors & Admins can update flight cutoffs or reassign bays</span>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table" id="flights-full-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Flight ID</th>
+                                            <th>Destination</th>
+                                            <th>Loading Cutoff (Time)</th>
+                                            <th>Assigned Loading Bay</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="flights-full-body">
+                                        <!-- Dynamically populated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="panel mt-3">
+                            <div class="panel-header">
+                                <h3>Loading Bay Status</h3>
+                            </div>
+                            <div class="bays-grid" id="bays-container">
+                                <!-- Populated dynamically -->
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: CONVEYOR NETWORK ==================== -->
+                    <section id="view-conveyors" class="content-view">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Airport Conveyor Network Segments (Weighted Directed Graph)</h3>
+                                <span class="subtext">Toggle segments offline to simulate mechanical failure and trigger Dijkstra dynamic rerouting</span>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table" id="conveyors-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Origin Node</th>
+                                            <th>Destination Node</th>
+                                            <th>Processing / Transit Time</th>
+                                            <th>Status</th>
+                                            <th>Fail-Safe Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="conveyors-table-body">
+                                        <!-- Dynamically populated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: SECURITY CLEARANCE ==================== -->
+                    <section id="view-security" class="content-view">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Baggage Awaiting Security Clearance (Screening Hub)</h3>
+                                <span class="subtext">Security Officers verify screening status before bags are permitted onto conveyor routing queues</span>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table" id="security-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Bag ID</th>
+                                            <th>Passenger Category</th>
+                                            <th>Flight Assignment</th>
+                                            <th>Current Location</th>
+                                            <th>Screening Decision</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="security-table-body">
+                                        <!-- Dynamically populated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: USERS & AUDIT ==================== -->
+                    <section id="view-users" class="content-view">
+                        <div class="panel">
+                            <div class="panel-header">
+                                <h3>Staff Account Management (Administrator Only)</h3>
+                                <button id="btn-admin-add-user" class="btn btn-sm btn-primary">+ Create New Staff Account</button>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table" id="users-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Username</th>
+                                            <th>Role</th>
+                                            <th>Account Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="users-table-body">
+                                        <!-- Dynamically populated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="panel mt-3">
+                            <div class="panel-header">
+                                <h3>System Audit Log (Chain of Custody & Traceability)</h3>
+                            </div>
+                            <div class="table-responsive">
+                                <table class="data-table" id="audit-full-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Log ID</th>
+                                            <th>Timestamp</th>
+                                            <th>Actor (User)</th>
+                                            <th>Action Type</th>
+                                            <th>Target Record</th>
+                                            <th>Simulated Time</th>
+                                            <th>Outcome</th>
+                                            <th>Reason / Notes</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="audit-full-body">
+                                        <!-- Dynamically populated -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                </div>
+            </main>
+        </div>
+
+        <!-- ==================== MODAL: VISUAL ROUTE TRACKING ==================== -->
+        <div id="modal-tracking" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-header">
+                    <h3>Visual Route Tracking & ETA</h3>
+                    <button class="modal-close" id="modal-tracking-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="track-header-meta">
+                        <div><strong>Bag ID:</strong> <span id="track-bag-id">-</span></div>
+                        <div><strong>Workflow:</strong> <span id="track-bag-type">-</span></div>
+                        <div><strong>Flight:</strong> <span id="track-flight-id">-</span></div>
+                        <div><strong>Status:</strong> <span class="badge" id="track-status-badge">-</span></div>
+                        <div><strong>Estimated Arrival:</strong> <span id="track-eta">-</span></div>
+                        <div><strong>Loading Cutoff:</strong> <span id="track-cutoff">-</span></div>
+                    </div>
+
+                    <h4 class="mt-3 mb-2">Conveyor Node Pathway</h4>
+                    <!-- Connected-node visual pathway -->
+                    <div class="visual-route-container" id="visual-route-path">
+                        <!-- Populated dynamically with node elements -->
+                    </div>
+
+                    <div class="route-legend mt-3">
+                        <span class="legend-item"><span class="legend-dot dot-cleared"></span> Completed Node</span>
+                        <span class="legend-item"><span class="legend-dot dot-current"></span> Current Position</span>
+                        <span class="legend-item"><span class="legend-dot dot-upcoming"></span> Next Node</span>
+                        <span class="legend-item"><span class="legend-dot dot-dest"></span> Destination / Bay</span>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-tracking-btn-close">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL: REGISTER BAGGAGE ==================== -->
+        <div id="modal-register-bag" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3>Register Baggage</h3>
+                    <button class="modal-close" id="modal-reg-bag-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <form id="form-register-bag">
+                        <div class="form-group">
+                            <label for="new-bag-id">Baggage Barcode / ID</label>
+                            <input type="text" id="new-bag-id" placeholder="e.g. B101, B204" required>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-bag-direction">Direction / Workflow</label>
+                            <select id="new-bag-direction">
+                                <option value="OUTGOING">Outgoing (Check-in → Security → Conveyor → Loading Bay)</option>
+                                <option value="INCOMING">Incoming (Unload Point → Conveyor → Baggage Claim Carousel)</option>
+                                <option value="TRANSFER">Transfer (Inbound Transfer → Security → Connecting Flight Bay)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-bag-category">Passenger Category</label>
+                            <select id="new-bag-category">
+                                <option value="1">First Class (VIP Priority)</option>
+                                <option value="2">Business Class</option>
+                                <option value="3" selected>Economy Class</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="group-flight-select">
+                            <label for="new-bag-flight">Assigned Flight</label>
+                            <select id="new-bag-flight">
+                                <!-- Populated dynamically -->
+                            </select>
+                        </div>
+                        <div class="form-group" id="group-dest-select" style="display:none;">
+                            <label for="new-bag-dest">Claim Carousel Destination</label>
+                            <select id="new-bag-dest">
+                                <option value="CLAIM-CAROUSEL-1">CLAIM-CAROUSEL-1 (Domestic Arrivals)</option>
+                                <option value="CLAIM-CAROUSEL-2">CLAIM-CAROUSEL-2 (International Arrivals)</option>
+                            </select>
+                        </div>
+                    </form>
+                    <div id="register-bag-error" class="alert-box alert-error" style="display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-reg-bag-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="modal-reg-bag-submit">Register</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL: REJECT CLEARANCE REASON ==================== -->
+        <div id="modal-reject-reason" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3>Reject Security Clearance</h3>
+                    <button class="modal-close" id="modal-reject-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Provide specific reason for security rejection for bag: <strong id="reject-bag-id-display"></strong></p>
+                    <div class="form-group">
+                        <label for="reject-reason-input">Security Concern / Reason</label>
+                        <textarea id="reject-reason-input" rows="3" placeholder="e.g. Prohibited item detected in X-ray screening, oversized battery pack..."></textarea>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-reject-cancel">Cancel</button>
+                    <button class="btn btn-danger" id="modal-reject-confirm">Confirm Rejection</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL: UPDATE FLIGHT ==================== -->
+        <div id="modal-update-flight" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3>Update Flight Details</h3>
+                    <button class="modal-close" id="modal-flight-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label>Flight ID</label>
+                        <input type="text" id="update-flight-id" readonly disabled>
+                    </div>
+                    <div class="form-group">
+                        <label for="update-flight-cutoff">Loading Cutoff (Minutes from midnight, e.g. 630 = 10:30)</label>
+                        <input type="number" id="update-flight-cutoff" min="1" max="1440">
+                    </div>
+                    <div class="form-group">
+                        <label for="update-flight-bay">Assigned Loading Bay</label>
+                        <select id="update-flight-bay">
+                            <option value="BAY-A">BAY-A</option>
+                            <option value="BAY-B">BAY-B</option>
+                            <option value="BAY-C">BAY-C</option>
+                            <option value="BAY-D">BAY-D</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-flight-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="modal-flight-submit">Save Changes</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TOAST NOTIFICATION CONTAINER ==================== -->
+        <div id="toast-container" class="toast-container"></div>
+
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
