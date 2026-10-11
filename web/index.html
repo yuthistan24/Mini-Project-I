@@ -3,26 +3,27 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vaanam Airport — Intelligent Baggage Handling & Routing System</title>
+    <title>Vaanam Airport — Intelligent Baggage Management & Tracking System</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 </head>
 <body>
     <div id="app-container">
 
-        <!-- ==================== LOGIN SCREEN ==================== -->
+        <!-- ==================== SCREEN 1: LOGIN ==================== -->
         <div id="login-screen" class="auth-screen active">
             <div class="auth-card">
                 <div class="airport-brand">
-                    <div class="brand-icon">✈</div>
-                    <h2>Vaanam Airport</h2>
-                    <p class="brand-tagline">Intelligent Baggage Handling & Routing System</p>
+                    <h2>Vaanam Airport Management System</h2>
+                    <p class="brand-tagline">Baggage Handling, Deadline Processing &amp; Conveyor Routing Simulation</p>
                 </div>
 
                 <div class="auth-form">
-                    <h3>Staff Portal Login</h3>
                     <div class="form-group">
-                        <label for="username">Username</label>
-                        <input type="text" id="username" placeholder="Enter username" autocomplete="username">
+                        <label for="username">Username / Passenger ID</label>
+                        <input type="text" id="username" placeholder="Enter username or passenger ID" autocomplete="username">
                     </div>
                     <div class="form-group">
                         <label for="password">Password</label>
@@ -33,35 +34,35 @@
                     </div>
                     <button id="login-btn" class="btn btn-primary btn-block">
                         <span class="btn-text">Sign In</span>
-                        <span class="btn-spinner" style="display:none;">⏳</span>
+                        <span class="btn-spinner" style="display:none;">...</span>
                     </button>
-                    <div id="login-error" class="alert-box alert-error" style="display: none;"></div>
+                    <div id="login-error" class="alert-box alert-error" style="display:none;"></div>
 
                     <div class="auth-footer">
-                        <span class="subtext">Initial administrator or new account setup?</span>
-                        <a href="#" id="show-register-link">Admin Account Provisioning</a>
+                        <span class="subtext">Initial system setup?</span>
+                        <a href="#" id="show-register-link">Administrator Setup Portal</a>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- ==================== REGISTRATION SCREEN ==================== -->
+        <!-- ==================== SCREEN 2: INITIAL ADMIN PROVISIONING ==================== -->
         <div id="register-screen" class="auth-screen">
             <div class="auth-card">
                 <div class="airport-brand">
-                    <div class="brand-icon">🔐</div>
-                    <h2>Vaanam Airport</h2>
-                    <p class="brand-tagline">Authorized Account Provisioning</p>
+                    <div class="brand-badge">🔐 SECURITY PROVISIONING</div>
+                    <h2>Account Setup Portal</h2>
+                    <p class="brand-tagline">Authorized Staff &amp; Administrator Account Creation</p>
                 </div>
 
                 <div class="auth-form">
                     <div class="alert-box alert-info">
-                        <strong>Policy:</strong> Initial system setup allows first-time Admin creation. Subsequent accounts require authorized Administrator login.
+                        <strong>Policy:</strong> Initial system boot allows first Administrator creation. Subsequent accounts require authorized Administrator login.
                     </div>
 
                     <div class="form-group">
                         <label for="reg-username">Username</label>
-                        <input type="text" id="reg-username" placeholder="New staff username">
+                        <input type="text" id="reg-username" placeholder="New account username">
                     </div>
                     <div class="form-group">
                         <label for="reg-password">Initial Password</label>
@@ -74,12 +75,17 @@
                     <div class="form-group">
                         <label for="reg-role">Role Assignment</label>
                         <select id="reg-role">
-                            <option value="ADMIN">ADMIN — Full System & User Control</option>
-                            <option value="SUPERVISOR">SUPERVISOR — Flight & Conveyor Ops</option>
-                            <option value="BAGGAGE_OPERATOR" selected>BAGGAGE_OPERATOR — Check-in & Queue Processing</option>
-                            <option value="SECURITY_OFFICER">SECURITY_OFFICER — Screening & Clearance</option>
-                            <option value="AUDITOR">AUDITOR — Read-only Compliance & Logs</option>
+                            <option value="ADMIN">ADMIN — Full System Configuration &amp; User Control</option>
+                            <option value="BAGGAGE_MANAGER" selected>BAGGAGE_MANAGER — Routing, Flights &amp; Baggage Ops</option>
+                            <option value="PASSENGER">PASSENGER — Self-Service Baggage Tracking Only</option>
                         </select>
+                    </div>
+                    <div class="form-group" id="group-reg-clearance">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="reg-clearance">
+                            <span>Grant Certified Security Clearance Authority</span>
+                        </label>
+                        <small class="subtext">Separate authority required to verify and clear screened baggage</small>
                     </div>
 
                     <button id="register-btn" class="btn btn-primary btn-block">Provision Account</button>
@@ -90,13 +96,20 @@
             </div>
         </div>
 
-        <!-- ==================== MAIN DASHBOARD APPLICATION ==================== -->
+        <!-- ==================== SCREEN 3: MAIN APPLICATION DASHBOARD ==================== -->
         <div id="dashboard-screen" class="dashboard-layout">
             
-            <!-- Sidebar -->
+            <!-- Sidebar Navigation -->
             <aside class="sidebar">
                 <div class="sidebar-header">
-                    <div class="sidebar-logo">✈ Vaanam Ops</div>
+                    <div class="sidebar-logo">
+                        <span class="logo-icon">✈</span>
+                        <div class="logo-text">
+                            <strong>VAANAM</strong>
+                            <span class="logo-sub">AIRPORT OPS</span>
+                        </div>
+                    </div>
+                    
                     <div class="user-badge-card">
                         <div class="user-avatar" id="avatar-initials">AD</div>
                         <div class="user-meta">
@@ -108,40 +121,152 @@
 
                 <nav class="sidebar-nav">
                     <ul class="nav-menu">
-                        <li><a href="#" class="nav-item active" data-target="dashboard"><span class="nav-icon">📊</span> Dashboard</a></li>
-                        <li><a href="#" class="nav-item" data-target="baggage"><span class="nav-icon">🧳</span> Baggage Ops</a></li>
-                        <li><a href="#" class="nav-item" data-target="flights"><span class="nav-icon">🛫</span> Flights & Bays</a></li>
-                        <li><a href="#" class="nav-item" data-target="conveyors"><span class="nav-icon">⚙️</span> Conveyor Network</a></li>
-                        <li id="nav-item-security"><a href="#" class="nav-item" data-target="security"><span class="nav-icon">🛡️</span> Security Clearance</a></li>
-                        <li id="nav-item-users"><a href="#" class="nav-item" data-target="users"><span class="nav-icon">👥</span> Users & Audit</a></li>
+                        <!-- Passenger View (Only for PASSENGER) -->
+                        <li id="nav-item-passenger" style="display:none;">
+                            <a href="#" class="nav-item active" data-target="passenger-portal">
+                                <span class="nav-icon">🧳</span> My Baggage Tracking
+                            </a>
+                        </li>
+
+                        <!-- Staff Views -->
+                        <li id="nav-item-dashboard">
+                            <a href="#" class="nav-item active" data-target="dashboard">
+                                <span class="nav-icon">📊</span> Operations Dashboard
+                            </a>
+                        </li>
+                        <li id="nav-item-baggage">
+                            <a href="#" class="nav-item" data-target="baggage">
+                                <span class="nav-icon">🏷️</span> Baggage Operations
+                            </a>
+                        </li>
+                        <li id="nav-item-passengers">
+                            <a href="#" class="nav-item" data-target="passengers">
+                                <span class="nav-icon">👤</span> Passenger Manifest
+                            </a>
+                        </li>
+                        <li id="nav-item-flights">
+                            <a href="#" class="nav-item" data-target="flights">
+                                <span class="nav-icon">🛫</span> Flights &amp; Loading Bays
+                            </a>
+                        </li>
+                        <li id="nav-item-conveyors">
+                            <a href="#" class="nav-item" data-target="conveyors">
+                                <span class="nav-icon">⚙️</span> Conveyor Network
+                            </a>
+                        </li>
+                        <li id="nav-item-security" style="display:none;">
+                            <a href="#" class="nav-item" data-target="security">
+                                <span class="nav-icon">🛡️</span> Security Clearance
+                            </a>
+                        </li>
+                        <li id="nav-item-users" style="display:none;">
+                            <a href="#" class="nav-item" data-target="users">
+                                <span class="nav-icon">👥</span> Staff &amp; Users
+                            </a>
+                        </li>
+                        <li id="nav-item-audit" style="display:none;">
+                            <a href="#" class="nav-item" data-target="audit">
+                                <span class="nav-icon">📜</span> System Audit Logs
+                            </a>
+                        </li>
                     </ul>
                 </nav>
 
                 <div class="sidebar-footer">
-                    <button id="logout-btn" class="btn btn-danger btn-block"><span class="nav-icon">🚪</span> Logout</button>
+                    <button id="logout-btn" class="btn btn-danger btn-block">
+                        <span class="nav-icon">🚪</span> Sign Out
+                    </button>
                 </div>
             </aside>
 
             <!-- Main Workspace -->
             <main class="main-content">
+                
                 <!-- Top Header Bar -->
                 <header class="topbar">
                     <div class="topbar-left">
-                        <h2 class="view-title" id="page-heading">Airport Operations Dashboard</h2>
+                        <h2 class="view-title" id="page-heading">Operations Dashboard</h2>
+                        <span class="view-subtitle" id="page-subheading">Live Baggage Flow &amp; Dijkstra Routing System</span>
                     </div>
                     <div class="topbar-right">
                         <div class="clock-display" title="Simulated Operations Clock">
                             <span class="clock-icon">🕒</span>
-                            <span class="clock-label">Simulated Clock:</span>
+                            <span class="clock-label">Airport Clock:</span>
                             <strong id="simulated-clock-time">09:00 AM</strong>
                         </div>
-                        <button id="advance-clock-btn" class="btn btn-sm btn-outline" title="Advance simulated operations clock">+15 Mins</button>
+                        <button id="advance-clock-btn" class="btn btn-sm btn-outline" title="Advance simulated clock by 15 minutes">+15 Mins</button>
+                        <button id="btn-clean-reset" class="btn btn-sm btn-warning" title="Reset to clean demonstration sample data" style="display:none;">Clean Reset</button>
                     </div>
                 </header>
 
                 <div class="view-container">
 
-                    <!-- ==================== VIEW: DASHBOARD ==================== -->
+                    <!-- ==================== VIEW: PASSENGER PORTAL ==================== -->
+                    <section id="view-passenger-portal" class="content-view">
+                        <div class="passenger-welcome-banner">
+                            <div class="passenger-info-header">
+                                <div class="passenger-avatar-large">👤</div>
+                                <div>
+                                    <h3 id="passenger-banner-name">Welcome, Passenger</h3>
+                                    <p class="subtext" id="passenger-banner-meta">Passenger ID: <span id="passenger-banner-id">P101</span> • Flight: <span id="passenger-banner-flight">AI101</span></p>
+                                </div>
+                            </div>
+                            <div class="passenger-quick-track">
+                                <label for="passenger-track-input">Track Baggage by Tag ID:</label>
+                                <div class="search-input-group">
+                                    <input type="text" id="passenger-track-input" placeholder="e.g. BAG-101, BAG-102">
+                                    <button id="passenger-track-btn" class="btn btn-primary">Track</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="panel mt-3">
+                            <div class="panel-header">
+                                <div>
+                                    <h3>Your Checked Baggage</h3>
+                                    <span class="subtext">All bags registered under your passenger account</span>
+                                </div>
+                                <button class="btn btn-sm btn-outline" id="passenger-refresh-bags-btn">🔄 Refresh</button>
+                            </div>
+                            <div class="passenger-bags-grid" id="passenger-bags-container">
+                                <!-- Dynamically populated bag cards -->
+                            </div>
+                        </div>
+
+                        <!-- Live tracking card embedded for passenger -->
+                        <div class="panel mt-3" id="passenger-live-tracking-panel" style="display:none;">
+                            <div class="panel-header">
+                                <div>
+                                    <h3>Live Route Progress &amp; Estimated Arrival</h3>
+                                    <span class="subtext" id="passenger-active-bag-label">Bag: -</span>
+                                </div>
+                                <span class="badge badge-primary" id="passenger-live-status-badge">Status</span>
+                            </div>
+                            
+                            <div class="track-header-meta" id="passenger-track-meta">
+                                <div><strong>Bag Tag:</strong> <span id="pass-track-bag-id">-</span></div>
+                                <div><strong>Flight:</strong> <span id="pass-track-flight">-</span></div>
+                                <div><strong>Route:</strong> <span id="pass-track-airports">-</span></div>
+                                <div><strong>Current Node:</strong> <span id="pass-track-location">-</span></div>
+                                <div><strong>Destination:</strong> <span id="pass-track-dest">-</span></div>
+                                <div><strong>Estimated Transit:</strong> <span id="pass-track-eta">-</span></div>
+                            </div>
+
+                            <h4 class="mt-3 mb-2">Conveyor Pathway &amp; Checkpoints</h4>
+                            <div class="visual-route-container" id="passenger-visual-route">
+                                <!-- Populated dynamically -->
+                            </div>
+                            
+                            <div class="route-legend mt-2">
+                                <span class="legend-item"><span class="legend-dot dot-cleared"></span> Passed Node</span>
+                                <span class="legend-item"><span class="legend-dot dot-current"></span> Current Position</span>
+                                <span class="legend-item"><span class="legend-dot dot-upcoming"></span> Next In Route</span>
+                                <span class="legend-item"><span class="legend-dot dot-dest"></span> Destination Bay/Carousel</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: OPERATIONS DASHBOARD (ADMIN & MANAGER) ==================== -->
                     <section id="view-dashboard" class="content-view active">
                         <div class="metrics-grid">
                             <div class="metric-card metric-navy">
@@ -149,7 +274,7 @@
                                 <div class="metric-info">
                                     <span class="metric-label">Total Baggage</span>
                                     <h3 class="metric-value" id="dash-stat-total">0</h3>
-                                    <span class="metric-sub">Real database records</span>
+                                    <span class="metric-sub"><span id="dash-stat-outgoing">0</span> Outgoing • <span id="dash-stat-incoming">0</span> Incoming</span>
                                 </div>
                             </div>
                             <div class="metric-card metric-amber">
@@ -163,17 +288,17 @@
                             <div class="metric-card metric-blue">
                                 <div class="metric-icon">⏳</div>
                                 <div class="metric-info">
-                                    <span class="metric-label">Queued for Conveyors</span>
+                                    <span class="metric-label">Queued &amp; In-Transit</span>
                                     <h3 class="metric-value" id="dash-stat-queued">0</h3>
-                                    <span class="metric-sub">Priority queue routing</span>
+                                    <span class="metric-sub"><span id="dash-stat-intransit">0</span> currently moving</span>
                                 </div>
                             </div>
                             <div class="metric-card metric-green">
                                 <div class="metric-icon">✅</div>
                                 <div class="metric-info">
-                                    <span class="metric-label">Loaded / Claimed</span>
+                                    <span class="metric-label">Loaded / Collected</span>
                                     <h3 class="metric-value" id="dash-stat-loaded">0</h3>
-                                    <span class="metric-sub">Successfully processed</span>
+                                    <span class="metric-sub"><span id="dash-stat-collected">0</span> claimed at carousel</span>
                                 </div>
                             </div>
                             <div class="metric-card metric-red">
@@ -181,24 +306,24 @@
                                 <div class="metric-info">
                                     <span class="metric-label">Missed Cutoff</span>
                                     <h3 class="metric-value" id="dash-stat-missed">0</h3>
-                                    <span class="metric-sub">Cutoff violated (not loaded)</span>
+                                    <span class="metric-sub">Cutoff violated (halted)</span>
                                 </div>
                             </div>
                             <div class="metric-card metric-teal">
-                                <div class="metric-icon">⚡</div>
+                                <div class="metric-icon">⚙️</div>
                                 <div class="metric-info">
-                                    <span class="metric-label">Conveyor Availability</span>
+                                    <span class="metric-label">Conveyors Online</span>
                                     <h3 class="metric-value" id="dash-stat-conveyors">0 / 0</h3>
-                                    <span class="metric-sub">Operational segments</span>
+                                    <span class="metric-sub">Operational network segments</span>
                                 </div>
                             </div>
                         </div>
 
-                        <!-- Dashboard Split View -->
-                        <div class="dashboard-split">
+                        <!-- Split View -->
+                        <div class="dashboard-split mt-3">
                             <div class="panel">
                                 <div class="panel-header">
-                                    <h3>Active Flights & Loading Bays</h3>
+                                    <h3>Active Flight Departures &amp; Loading Bays</h3>
                                     <button class="btn btn-sm btn-outline" id="dash-view-all-flights">View All</button>
                                 </div>
                                 <div class="table-responsive">
@@ -207,59 +332,60 @@
                                             <tr>
                                                 <th>Flight ID</th>
                                                 <th>Destination</th>
-                                                <th>Loading Cutoff</th>
-                                                <th>Assigned Bay</th>
+                                                <th>Departure</th>
+                                                <th>Cutoff Time</th>
+                                                <th>Loading Bay</th>
                                             </tr>
                                         </thead>
-                                        <tbody>
-                                            <!-- Dynamically populated -->
-                                        </tbody>
+                                        <tbody></tbody>
                                     </table>
                                 </div>
                             </div>
 
                             <div class="panel">
                                 <div class="panel-header">
-                                    <h3>Recent Operational Audit Events</h3>
-                                    <button class="btn btn-sm btn-outline" id="dash-view-all-audit">View Logs</button>
+                                    <h3>Bags Requiring Immediate Attention</h3>
+                                    <span class="subtext">Awaiting screening, late cutoff, or exception</span>
                                 </div>
                                 <div class="table-responsive">
-                                    <table class="data-table" id="dash-audit-table">
+                                    <table class="data-table" id="dash-attention-table">
                                         <thead>
                                             <tr>
-                                                <th>Time</th>
-                                                <th>User</th>
-                                                <th>Action</th>
-                                                <th>Result</th>
+                                                <th>Bag ID</th>
+                                                <th>Passenger</th>
+                                                <th>Flight</th>
+                                                <th>Current Node</th>
+                                                <th>Status</th>
                                             </tr>
                                         </thead>
-                                        <tbody>
-                                            <!-- Dynamically populated -->
-                                        </tbody>
+                                        <tbody id="dash-attention-body"></tbody>
                                     </table>
                                 </div>
                             </div>
                         </div>
                     </section>
 
-                    <!-- ==================== VIEW: BAGGAGE OPS ==================== -->
+                    <!-- ==================== VIEW: BAGGAGE OPERATIONS ==================== -->
                     <section id="view-baggage" class="content-view">
                         <div class="action-bar">
                             <div class="filter-group">
-                                <button class="filter-tab active" data-filter="ALL">All Baggage</button>
-                                <button class="filter-tab" data-filter="OUTGOING">Outgoing (Outbound)</button>
-                                <button class="filter-tab" data-filter="INCOMING">Incoming (Inbound)</button>
-                                <button class="filter-tab" data-filter="TRANSFER">Transfer (Connecting)</button>
+                                <button class="filter-tab active" data-filter="ALL">All Bags</button>
+                                <button class="filter-tab" data-filter="OUTGOING">Outgoing</button>
+                                <button class="filter-tab" data-filter="INCOMING">Incoming</button>
+                                <button class="filter-tab" data-filter="TRANSFER">Transfer</button>
                                 <button class="filter-tab" data-filter="CLEARANCE">Awaiting Clearance</button>
+                                <button class="filter-tab" data-filter="IN_TRANSIT">In Transit</button>
+                                <button class="filter-tab" data-filter="LOADED">Loaded / Claimed</button>
+                                <button class="filter-tab" data-filter="EXCEPTION">Exceptions</button>
                             </div>
                             <div class="action-buttons">
                                 <button id="btn-open-register-bag" class="btn btn-primary">+ Register Baggage</button>
-                                <button id="btn-process-next-bag" class="btn btn-success">▶ Process Next Queued Bag</button>
+                                <button id="btn-process-next-bag" class="btn btn-success">▶ Process Next Bag</button>
                             </div>
                         </div>
 
                         <div class="search-bar">
-                            <input type="text" id="baggage-search-input" placeholder="🔍 Search by Baggage ID (e.g. B001, B002)...">
+                            <input type="text" id="baggage-search-input" placeholder="🔍 Search by Bag ID, Passenger Name, Flight, or Destination...">
                             <button id="baggage-refresh-btn" class="btn btn-sm btn-outline">🔄 Refresh</button>
                         </div>
 
@@ -269,8 +395,9 @@
                                     <thead>
                                         <tr>
                                             <th>Bag ID</th>
-                                            <th>Type / Flow</th>
-                                            <th>Category</th>
+                                            <th>Passenger (Owner)</th>
+                                            <th>Direction</th>
+                                            <th>Class</th>
                                             <th>Flight ID</th>
                                             <th>Current Node</th>
                                             <th>Destination</th>
@@ -280,9 +407,37 @@
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="baggage-table-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
+                                    <tbody id="baggage-table-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: PASSENGERS ==================== -->
+                    <section id="view-passengers" class="content-view">
+                        <div class="action-bar">
+                            <div>
+                                <h3>Passenger Directory</h3>
+                                <span class="subtext">Every baggage item belongs to an authenticated passenger</span>
+                            </div>
+                            <button id="btn-open-add-passenger" class="btn btn-primary">+ Add New Passenger</button>
+                        </div>
+
+                        <div class="panel mt-2">
+                            <div class="table-responsive">
+                                <table class="data-table" id="passengers-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Passenger ID</th>
+                                            <th>Full Name</th>
+                                            <th>Portal Username</th>
+                                            <th>Assigned Flight</th>
+                                            <th>Category</th>
+                                            <th>Contact / Email</th>
+                                            <th>Associated Bags</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="passengers-table-body"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -292,34 +447,34 @@
                     <section id="view-flights" class="content-view">
                         <div class="panel">
                             <div class="panel-header">
-                                <h3>Scheduled Flights & Assigned Loading Bays</h3>
-                                <span class="subtext">Supervisors & Admins can update flight cutoffs or reassign bays</span>
+                                <div>
+                                    <h3>Scheduled Flights &amp; Loading Bay Assignments</h3>
+                                    <span class="subtext">Admins &amp; Baggage Managers can reconfigure flight cutoffs or reassign bays</span>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="data-table" id="flights-full-table">
                                     <thead>
                                         <tr>
                                             <th>Flight ID</th>
+                                            <th>Origin</th>
                                             <th>Destination</th>
-                                            <th>Loading Cutoff (Time)</th>
+                                            <th>Departure Time</th>
+                                            <th>Loading Cutoff</th>
                                             <th>Assigned Loading Bay</th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="flights-full-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
+                                    <tbody id="flights-full-body"></tbody>
                                 </table>
                             </div>
                         </div>
 
                         <div class="panel mt-3">
                             <div class="panel-header">
-                                <h3>Loading Bay Status</h3>
+                                <h3>Aircraft Loading Bays Status</h3>
                             </div>
-                            <div class="bays-grid" id="bays-container">
-                                <!-- Populated dynamically -->
-                            </div>
+                            <div class="bays-grid" id="bays-container"></div>
                         </div>
                     </section>
 
@@ -327,8 +482,10 @@
                     <section id="view-conveyors" class="content-view">
                         <div class="panel">
                             <div class="panel-header">
-                                <h3>Airport Conveyor Network Segments (Weighted Directed Graph)</h3>
-                                <span class="subtext">Toggle segments offline to simulate mechanical failure and trigger Dijkstra dynamic rerouting</span>
+                                <div>
+                                    <h3>Airport Conveyor Network Segments (Weighted Directed Graph)</h3>
+                                    <span class="subtext">Toggle segments offline to simulate mechanical jams; Dijkstra automatically reroutes in real-time</span>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="data-table" id="conveyors-table">
@@ -336,14 +493,12 @@
                                         <tr>
                                             <th>Origin Node</th>
                                             <th>Destination Node</th>
-                                            <th>Processing / Transit Time</th>
-                                            <th>Status</th>
+                                            <th>Transit Time (Mins)</th>
+                                            <th>Operational Status</th>
                                             <th>Fail-Safe Action</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="conveyors-table-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
+                                    <tbody id="conveyors-table-body"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -353,55 +508,68 @@
                     <section id="view-security" class="content-view">
                         <div class="panel">
                             <div class="panel-header">
-                                <h3>Baggage Awaiting Security Clearance (Screening Hub)</h3>
-                                <span class="subtext">Security Officers verify screening status before bags are permitted onto conveyor routing queues</span>
+                                <div>
+                                    <h3>Certified Baggage Security Screening Hub</h3>
+                                    <span class="subtext">Screen and clear baggage before conveyor dispatch</span>
+                                </div>
                             </div>
                             <div class="table-responsive">
                                 <table class="data-table" id="security-table">
                                     <thead>
                                         <tr>
                                             <th>Bag ID</th>
-                                            <th>Passenger Category</th>
-                                            <th>Flight Assignment</th>
+                                            <th>Passenger</th>
+                                            <th>Class</th>
+                                            <th>Flight</th>
                                             <th>Current Location</th>
+                                            <th>Status</th>
                                             <th>Screening Decision</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="security-table-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
+                                    <tbody id="security-table-body"></tbody>
                                 </table>
                             </div>
                         </div>
                     </section>
 
-                    <!-- ==================== VIEW: USERS & AUDIT ==================== -->
+                    <!-- ==================== VIEW: USERS MANAGEMENT (ADMIN ONLY) ==================== -->
                     <section id="view-users" class="content-view">
-                        <div class="panel">
-                            <div class="panel-header">
-                                <h3>Staff Account Management (Administrator Only)</h3>
-                                <button id="btn-admin-add-user" class="btn btn-sm btn-primary">+ Create New Staff Account</button>
+                        <div class="action-bar">
+                            <div>
+                                <h3>System User Accounts &amp; Roles</h3>
+                                <span class="subtext">Manage credentials, assign roles, and grant clearance authorities</span>
                             </div>
+                            <button id="btn-admin-add-user" class="btn btn-primary">+ Create New User</button>
+                        </div>
+
+                        <div class="panel mt-2">
                             <div class="table-responsive">
                                 <table class="data-table" id="users-table">
                                     <thead>
                                         <tr>
                                             <th>Username</th>
                                             <th>Role</th>
+                                            <th>Clearance Authority</th>
+                                            <th>Linked Passenger</th>
                                             <th>Account Status</th>
                                             <th>Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="users-table-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
+                                    <tbody id="users-table-body"></tbody>
                                 </table>
                             </div>
                         </div>
+                    </section>
 
-                        <div class="panel mt-3">
+                    <!-- ==================== VIEW: AUDIT LOGS (ADMIN ONLY) ==================== -->
+                    <section id="view-audit" class="content-view">
+                        <div class="panel">
                             <div class="panel-header">
-                                <h3>System Audit Log (Chain of Custody & Traceability)</h3>
+                                <div>
+                                    <h3>Immutable Operational Audit Trail</h3>
+                                    <span class="subtext">Full chain-of-custody recording all system state mutations</span>
+                                </div>
+                                <button class="btn btn-sm btn-outline" id="audit-refresh-btn">🔄 Refresh Logs</button>
                             </div>
                             <div class="table-responsive">
                                 <table class="data-table" id="audit-full-table">
@@ -409,7 +577,7 @@
                                         <tr>
                                             <th>Log ID</th>
                                             <th>Timestamp</th>
-                                            <th>Actor (User)</th>
+                                            <th>Actor</th>
                                             <th>Action Type</th>
                                             <th>Target Record</th>
                                             <th>Simulated Time</th>
@@ -417,9 +585,7 @@
                                             <th>Reason / Notes</th>
                                         </tr>
                                     </thead>
-                                    <tbody id="audit-full-body">
-                                        <!-- Dynamically populated -->
-                                    </tbody>
+                                    <tbody id="audit-full-body"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -433,30 +599,45 @@
         <div id="modal-tracking" class="modal-backdrop" style="display:none;">
             <div class="modal-dialog modal-lg">
                 <div class="modal-header">
-                    <h3>Visual Route Tracking & ETA</h3>
+                    <h3>Visual Route Tracking &amp; Dynamic ETA</h3>
                     <button class="modal-close" id="modal-tracking-close">&times;</button>
                 </div>
                 <div class="modal-body">
                     <div class="track-header-meta">
-                        <div><strong>Bag ID:</strong> <span id="track-bag-id">-</span></div>
+                        <div><strong>Bag Tag:</strong> <span id="track-bag-id">-</span></div>
+                        <div><strong>Passenger:</strong> <span id="track-passenger-name">-</span></div>
                         <div><strong>Workflow:</strong> <span id="track-bag-type">-</span></div>
                         <div><strong>Flight:</strong> <span id="track-flight-id">-</span></div>
                         <div><strong>Status:</strong> <span class="badge" id="track-status-badge">-</span></div>
-                        <div><strong>Estimated Arrival:</strong> <span id="track-eta">-</span></div>
-                        <div><strong>Loading Cutoff:</strong> <span id="track-cutoff">-</span></div>
+                        <div><strong>Estimated Transit:</strong> <span id="track-eta">-</span></div>
+                        <div><strong>Cutoff:</strong> <span id="track-cutoff">-</span></div>
                     </div>
 
-                    <h4 class="mt-3 mb-2">Conveyor Node Pathway</h4>
-                    <!-- Connected-node visual pathway -->
-                    <div class="visual-route-container" id="visual-route-path">
-                        <!-- Populated dynamically with node elements -->
-                    </div>
+                    <h4 class="mt-3 mb-2">Conveyor Pathway &amp; Checkpoints</h4>
+                    <div class="visual-route-container" id="visual-route-path"></div>
 
                     <div class="route-legend mt-3">
                         <span class="legend-item"><span class="legend-dot dot-cleared"></span> Completed Node</span>
                         <span class="legend-item"><span class="legend-dot dot-current"></span> Current Position</span>
                         <span class="legend-item"><span class="legend-dot dot-upcoming"></span> Next Node</span>
                         <span class="legend-item"><span class="legend-dot dot-dest"></span> Destination / Bay</span>
+                    </div>
+
+                    <h4 class="mt-4 mb-2">Transit History &amp; Step Checkpoints</h4>
+                    <div class="table-responsive">
+                        <table class="data-table" id="track-history-table">
+                            <thead>
+                                <tr>
+                                    <th>Step</th>
+                                    <th>From Node</th>
+                                    <th>To Node</th>
+                                    <th>Status</th>
+                                    <th>Time</th>
+                                    <th>Timestamp</th>
+                                </tr>
+                            </thead>
+                            <tbody id="track-history-body"></tbody>
+                        </table>
                     </div>
                 </div>
                 <div class="modal-footer">
@@ -475,30 +656,32 @@
                 <div class="modal-body">
                     <form id="form-register-bag">
                         <div class="form-group">
-                            <label for="new-bag-id">Baggage Barcode / ID</label>
-                            <input type="text" id="new-bag-id" placeholder="e.g. B101, B204" required>
+                            <label for="new-bag-id">Unique Baggage Barcode / Tag ID</label>
+                            <input type="text" id="new-bag-id" placeholder="e.g. BAG-201" required>
                         </div>
                         <div class="form-group">
-                            <label for="new-bag-direction">Direction / Workflow</label>
+                            <label for="new-bag-passenger">Select Passenger</label>
+                            <select id="new-bag-passenger" required></select>
+                        </div>
+                        <div class="form-group">
+                            <label for="new-bag-direction">Baggage Workflow Direction</label>
                             <select id="new-bag-direction">
-                                <option value="OUTGOING">Outgoing (Check-in → Security → Conveyor → Loading Bay)</option>
-                                <option value="INCOMING">Incoming (Unload Point → Conveyor → Baggage Claim Carousel)</option>
-                                <option value="TRANSFER">Transfer (Inbound Transfer → Security → Connecting Flight Bay)</option>
+                                <option value="OUTGOING">Outgoing (Check-in → Screening → Conveyor → Aircraft Loading Bay)</option>
+                                <option value="INCOMING">Incoming (Aircraft Unload → Conveyor → Baggage Claim Carousel)</option>
+                                <option value="TRANSFER">Transfer (Transit Hub → Transit Check → Connecting Departure Bay)</option>
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="new-bag-category">Passenger Category</label>
+                            <label for="new-bag-category">Passenger Travel Class</label>
                             <select id="new-bag-category">
-                                <option value="1">First Class (VIP Priority)</option>
+                                <option value="1">First Class (VIP High Priority)</option>
                                 <option value="2">Business Class</option>
                                 <option value="3" selected>Economy Class</option>
                             </select>
                         </div>
                         <div class="form-group" id="group-flight-select">
                             <label for="new-bag-flight">Assigned Flight</label>
-                            <select id="new-bag-flight">
-                                <!-- Populated dynamically -->
-                            </select>
+                            <select id="new-bag-flight"></select>
                         </div>
                         <div class="form-group" id="group-dest-select" style="display:none;">
                             <label for="new-bag-dest">Claim Carousel Destination</label>
@@ -512,28 +695,70 @@
                 </div>
                 <div class="modal-footer">
                     <button class="btn btn-secondary" id="modal-reg-bag-cancel">Cancel</button>
-                    <button class="btn btn-primary" id="modal-reg-bag-submit">Register</button>
+                    <button class="btn btn-primary" id="modal-reg-bag-submit">Confirm Registration</button>
                 </div>
             </div>
         </div>
 
-        <!-- ==================== MODAL: REJECT CLEARANCE REASON ==================== -->
-        <div id="modal-reject-reason" class="modal-backdrop" style="display:none;">
+        <!-- ==================== MODAL: ADD PASSENGER ==================== -->
+        <div id="modal-add-passenger" class="modal-backdrop" style="display:none;">
             <div class="modal-dialog">
                 <div class="modal-header">
-                    <h3>Reject Security Clearance</h3>
-                    <button class="modal-close" id="modal-reject-close">&times;</button>
+                    <h3>Register New Passenger</h3>
+                    <button class="modal-close" id="modal-add-p-close">&times;</button>
                 </div>
                 <div class="modal-body">
-                    <p>Provide specific reason for security rejection for bag: <strong id="reject-bag-id-display"></strong></p>
                     <div class="form-group">
-                        <label for="reject-reason-input">Security Concern / Reason</label>
-                        <textarea id="reject-reason-input" rows="3" placeholder="e.g. Prohibited item detected in X-ray screening, oversized battery pack..."></textarea>
+                        <label for="new-p-id">Passenger ID</label>
+                        <input type="text" id="new-p-id" placeholder="e.g. P115" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-p-name">Full Name</label>
+                        <input type="text" id="new-p-name" placeholder="e.g. Rohini Sundaram" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-p-flight">Booked Flight</label>
+                        <select id="new-p-flight"></select>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-p-class">Travel Class</label>
+                        <select id="new-p-class">
+                            <option value="1">First Class</option>
+                            <option value="2">Business Class</option>
+                            <option value="3" selected>Economy Class</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-p-contact">Contact Info / Email</label>
+                        <input type="text" id="new-p-contact" placeholder="e.g. rohini@example.com">
+                    </div>
+                    <div id="add-passenger-error" class="alert-box alert-error" style="display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-add-p-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="modal-add-p-submit">Create Passenger</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL: SECURITY CLEARANCE REASON ==================== -->
+        <div id="modal-clearance-decision" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3 id="clearance-modal-title">Screening Decision</h3>
+                    <button class="modal-close" id="modal-clearance-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <p>Baggage ID: <strong id="clearance-bag-id-display"></strong></p>
+                    <div class="form-group">
+                        <label for="clearance-notes-input">Screening Inspector Notes / Reason</label>
+                        <textarea id="clearance-notes-input" rows="3" placeholder="Provide screening notes or failure reasons..."></textarea>
                     </div>
                 </div>
                 <div class="modal-footer">
-                    <button class="btn btn-secondary" id="modal-reject-cancel">Cancel</button>
-                    <button class="btn btn-danger" id="modal-reject-confirm">Confirm Rejection</button>
+                    <button class="btn btn-secondary" id="modal-clearance-cancel">Cancel</button>
+                    <button class="btn btn-success" id="modal-clearance-approve">Approve Clearance</button>
+                    <button class="btn btn-danger" id="modal-clearance-reject">Reject Clearance</button>
                 </div>
             </div>
         </div>
@@ -551,7 +776,7 @@
                         <input type="text" id="update-flight-id" readonly disabled>
                     </div>
                     <div class="form-group">
-                        <label for="update-flight-cutoff">Loading Cutoff (Minutes from midnight, e.g. 630 = 10:30)</label>
+                        <label for="update-flight-cutoff">Loading Cutoff Time (Minutes from midnight, e.g. 630 = 10:30 AM)</label>
                         <input type="number" id="update-flight-cutoff" min="1" max="1440">
                     </div>
                     <div class="form-group">
@@ -571,7 +796,50 @@
             </div>
         </div>
 
-        <!-- ==================== TOAST NOTIFICATION CONTAINER ==================== -->
+        <!-- ==================== MODAL: ADMIN CREATE USER ==================== -->
+        <div id="modal-create-user" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog">
+                <div class="modal-header">
+                    <h3>Create User Account</h3>
+                    <button class="modal-close" id="modal-user-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="new-user-name">Username</label>
+                        <input type="text" id="new-user-name" placeholder="e.g. ops_user" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-user-pass">Initial Password</label>
+                        <input type="password" id="new-user-pass" placeholder="Password" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="new-user-role">Role</label>
+                        <select id="new-user-role">
+                            <option value="ADMIN">ADMIN</option>
+                            <option value="BAGGAGE_MANAGER" selected>BAGGAGE_MANAGER</option>
+                            <option value="PASSENGER">PASSENGER</option>
+                        </select>
+                    </div>
+                    <div class="form-group" id="group-new-user-clearance">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="new-user-clearance">
+                            <span>Grant Security Clearance Authority</span>
+                        </label>
+                    </div>
+                    <div class="form-group" id="group-new-user-passenger" style="display:none;">
+                        <label for="new-user-passenger-id">Link to Passenger Record</label>
+                        <select id="new-user-passenger-id"></select>
+                    </div>
+                    <div id="create-user-error" class="alert-box alert-error" style="display:none;"></div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-user-cancel">Cancel</button>
+                    <button class="btn btn-primary" id="modal-user-submit">Create Account</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== TOAST NOTIFICATIONS ==================== -->
         <div id="toast-container" class="toast-container"></div>
 
     </div>

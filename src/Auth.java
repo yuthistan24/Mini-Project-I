@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Auth {
-    // Top-level class container if needed, or AuthManager as primary utility
+    // Utility and container for authentication mechanisms
 }
 
 class AuthManager {
@@ -70,7 +70,38 @@ class AuthManager {
         }
     }
 
-    // Generates a random salt and hashes the password using PBKDF2WithHmacSHA256
+    // Security clearance authority: Must NOT be granted merely because the user is an admin.
+    public static boolean hasClearanceAuthority(User user) {
+        if (user == null || !user.isActive()) return false;
+        return user.hasClearanceAuthority();
+    }
+
+    public static void requireClearancePermission(User user) {
+        if (!hasClearanceAuthority(user)) {
+            String roleName = (user != null ? user.getRole().toString() : "GUEST");
+            throw new SecurityException("Unauthorized: User (" + (user != null ? user.getUsername() : "GUEST") +
+                    ", " + roleName + ") does not hold certified security clearance authority.");
+        }
+    }
+
+    // Enforce passenger data privacy server-side
+    public static void requirePassengerAccess(User user, String passengerId) {
+        if (user == null || !user.isActive()) {
+            throw new SecurityException("Unauthorized: Authentication required.");
+        }
+        if (user.getRole() == Role.ADMIN || user.getRole() == Role.BAGGAGE_MANAGER) {
+            return; // Staff can view authorized baggage
+        }
+        if (user.getRole() == Role.PASSENGER) {
+            if (passengerId == null || !passengerId.equalsIgnoreCase(user.getLinkedPassengerId())) {
+                throw new SecurityException("Forbidden: Passengers may only view or track their own baggage records.");
+            }
+            return;
+        }
+        throw new SecurityException("Forbidden: Access restricted.");
+    }
+
+    // Generates a random 16-byte salt and hashes password using PBKDF2WithHmacSHA256
     public static String[] hashPassword(String password) {
         try {
             SecureRandom random = new SecureRandom();
@@ -88,7 +119,7 @@ class AuthManager {
         }
     }
 
-    // Verifies a given password against a stored hash and salt
+    // Verifies password against stored PBKDF2 hash and salt
     public static boolean verifyPassword(String password, String storedHash, String storedSalt) {
         try {
             if (password == null || storedHash == null || storedSalt == null) return false;
