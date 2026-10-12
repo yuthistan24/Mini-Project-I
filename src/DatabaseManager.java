@@ -402,6 +402,8 @@ public class DatabaseManager {
                 String clearanceReason = rs.getString("clearanceReason");
                 String statusStr = rs.getString("status");
                 int estTime = rs.getInt("estimatedTime");
+                String createdAt = rs.getString("createdAt");
+                String updatedAt = rs.getString("updatedAt");
 
                 PassengerCategory cat = PassengerCategory.fromRank(catRank);
                 BaggageDirection direction = BaggageDirection.OUTGOING;
@@ -420,17 +422,33 @@ public class DatabaseManager {
                 bag.setOriginAirport(origin);
                 bag.setDestinationAirport(destAirport);
                 bag.setCurrentLocation(currentLoc);
-                bag.setDestinationNode(destNode);
                 bag.setEstimatedTime(estTime);
                 bag.setLoadingCutoff(cutoff);
+                if (createdAt != null) bag.setCreatedAt(createdAt);
+                if (updatedAt != null) bag.setUpdatedAt(updatedAt);
 
                 if (flightId != null) {
                     Flight f = service.getFlight(flightId);
                     if (f != null) bag.assignFlight(f);
                 }
 
+                if (destNode != null && !destNode.isEmpty()) {
+                    bag.setDestinationNode(destNode);
+                }
                 bag.setClearance(cleared, clearanceReason);
                 bag.setStatus(BaggageStatus.fromString(statusStr));
+
+                // Synchronize route and ETA from conveyor graph if active
+                if (currentLoc != null && destNode != null && !destNode.isEmpty()) {
+                    RoutingResult res = service.getConveyorPlanner().getShortestPath(currentLoc, destNode);
+                    if (res != null) {
+                        bag.setCurrentRoute(res.route);
+                        if (bag.getStatus() != BaggageStatus.LOADED && bag.getStatus() != BaggageStatus.COLLECTED
+                                && bag.getStatus() != BaggageStatus.MISSED_CUTOFF) {
+                            bag.setEstimatedTime(res.totalTime);
+                        }
+                    }
+                }
 
                 service.addLoadedBaggage(bag);
             }
@@ -634,5 +652,62 @@ public class DatabaseManager {
             System.err.println("Clean reset error: " + e.getMessage());
         }
         initializeDatabase();
+    }
+
+    public static int validateAndRepairBaggageRecords(BaggageService service) {
+        int repairedCount = 0;
+        String sql = "SELECT bagId, direction, currentLocation, destinationNode, loadingCutoff, operatorClearance, status FROM Baggage";
+        try (Connection conn = connect(); Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            List<String[]> inconsistent = new ArrayList<>();
+            while (rs.next()) {
+                String bagId = rs.getString("bagId");
+                String dir = rs.getString("direction");
+                String loc = rs.getString("currentLocation");
+                String dest = rs.getString("destinationNode");
+                int cutoff = rs.getInt("loadingCutoff");
+                int cleared = rs.getInt("operatorClearance");
+                String status = rs.getString("status");
+
+                // Check 1: OUTGOING LOADED but not at destination bay
+                if ("OUTGOING".equalsIgnoreCase(dir) && "LOADED".equalsIgnoreCase(status)) {
+                    if (dest != null && !dest.equals(loc)) {
+                        inconsistent.add(new String[]{bagId, "currentLocation", dest, "LOADED bag location synchronized to assigned bay"});
+                    }
+                }
+                // Check 2: INCOMING COLLECTED/AT_COLLECTION_POINT but not at claim carousel
+                if ("INCOMING".equalsIgnoreCase(dir) && ("COLLECTED".equalsIgnoreCase(status) || "AT_COLLECTION_POINT".equalsIgnoreCase(status))) {
+                    if (loc == null || (!loc.startsWith("CLAIM-CAROUSEL") && !loc.equals("CLAIM-AREA"))) {
+                        String targetLoc = (dest != null && !dest.isEmpty()) ? dest : "CLAIM-CAROUSEL-1";
+                        inconsistent.add(new String[]{bagId, "currentLocation", targetLoc, "Claimed incoming baggage location set to claim carousel"});
+                    }
+                }
+                // Check 3: OUTGOING in transit/queued without screening clearance
+                if ("OUTGOING".equalsIgnoreCase(dir) && cleared == 0) {
+                    if ("IN_TRANSIT".equalsIgnoreCase(status) || "QUEUED".equalsIgnoreCase(status)) {
+                        inconsistent.add(new String[]{bagId, "status", "AWAITING_CLEARANCE", "Uncleared baggage halted in AWAITING_CLEARANCE"});
+                    }
+                }
+            }
+
+            for (String[] fix : inconsistent) {
+                String updateSql = "UPDATE Baggage SET " + fix[1] + " = ?, updatedAt = datetime('now') WHERE bagId = ?";
+                try (PreparedStatement pstmt = conn.prepareStatement(updateSql)) {
+                    pstmt.setString(1, fix[2]);
+                    pstmt.setString(2, fix[0]);
+                    pstmt.executeUpdate();
+                    repairedCount++;
+                    logAudit("SYSTEM", "DATA_REPAIR", fix[0], (service != null ? service.getSimulatedTime() : 540), "REPAIRED", fix[3]);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Data repair error: " + e.getMessage());
+        }
+        return repairedCount;
+    }
+
+    public static void syncBaggageFromDatabase(BaggageService service) {
+        if (service == null) return;
+        service.getAllBaggage().clear();
+        loadBaggage(service);
     }
 }

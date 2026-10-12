@@ -41,7 +41,9 @@ public class Main {
             server.createContext("/api/baggage/clearance", new BaggageClearanceHandler());
             server.createContext("/api/baggage/process", new BaggageProcessHandler());
             server.createContext("/api/baggage/step", new BaggageStepHandler());
+            server.createContext("/api/baggage/collect", new BaggageCollectHandler());
             server.createContext("/api/baggage/track", new BaggageTrackHandler());
+            server.createContext("/api/tracking/live", new LiveTrackingHandler());
             server.createContext("/api/passengers", new PassengerHandler());
             server.createContext("/api/flights", new FlightHandler());
             server.createContext("/api/flights/update", new FlightUpdateHandler());
@@ -383,8 +385,17 @@ public class Main {
                   .append("\"cleared\":").append(b.isOperatorCleared()).append(",")
                   .append("\"clearanceReason\":\"").append(escapeJson(b.getClearanceReason())).append("\",")
                   .append("\"status\":\"").append(b.getStatus()).append("\",")
-                  .append("\"estimatedTime\":").append(b.getEstimatedTime())
-                  .append("}");
+                  .append("\"estimatedTime\":").append(b.getEstimatedTime()).append(",")
+                  .append("\"updatedAt\":\"").append(escapeJson(b.getUpdatedAt())).append("\",")
+                  .append("\"route\":[");
+                List<String> r = b.getCurrentRoute();
+                if (r != null) {
+                    for (int j = 0; j < r.size(); j++) {
+                        if (j > 0) sb.append(",");
+                        sb.append("\"").append(escapeJson(r.get(j))).append("\"");
+                    }
+                }
+                sb.append("]}");
             }
             sb.append("]");
             sendResponse(exchange, 200, sb.toString());
@@ -596,6 +607,104 @@ public class Main {
         }
     }
 
+    static class BaggageCollectHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                sendResponse(exchange, 405, "{\"error\": \"Method not allowed\"}");
+                return;
+            }
+
+            User user = getSessionUser(exchange);
+            if (user == null || !user.isActive()) {
+                sendResponse(exchange, 401, "{\"error\": \"Unauthorized\"}");
+                return;
+            }
+
+            try {
+                Map<String, String> data = parseSimpleJson(readRequestBody(exchange));
+                String bagId = data.getOrDefault("bagId", "").trim();
+
+                Baggage bag = baggageService.collectBaggage(bagId, user);
+                sendResponse(exchange, 200, "{\"status\": \"Collected\", \"bagId\":\"" + escapeJson(bag.getBagId()) +
+                        "\", \"bagStatus\":\"" + bag.getStatus() + "\"}");
+            } catch (SecurityException se) {
+                sendResponse(exchange, 403, "{\"error\": \"" + escapeJson(se.getMessage()) + "\"}");
+            } catch (Exception e) {
+                sendResponse(exchange, 400, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+            }
+        }
+    }
+
+    static class LiveTrackingHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            User user = getSessionUser(exchange);
+            if (user == null || !user.isActive()) {
+                sendResponse(exchange, 401, "{\"error\": \"Unauthorized\"}");
+                return;
+            }
+
+            Collection<Baggage> list;
+            if (user.getRole() == Role.PASSENGER) {
+                list = baggageService.getBaggageForPassenger(user.getLinkedPassengerId());
+            } else {
+                list = baggageService.getAllBaggage().values();
+            }
+
+            StringBuilder sb = new StringBuilder("{\"baggage\":[");
+            int count = 0;
+            for (Baggage b : list) {
+                if (count++ > 0) sb.append(",");
+                sb.append("{")
+                  .append("\"bagId\":\"").append(escapeJson(b.getBagId())).append("\",")
+                  .append("\"passengerId\":\"").append(escapeJson(b.getPassengerId())).append("\",")
+                  .append("\"passengerName\":\"").append(escapeJson(b.getPassengerName())).append("\",")
+                  .append("\"bagType\":\"").append(escapeJson(b.getBagType())).append("\",")
+                  .append("\"direction\":\"").append(b.getDirection()).append("\",")
+                  .append("\"category\":\"").append(b.getPassengerCategory().getDisplayName()).append("\",")
+                  .append("\"flightId\":\"").append(b.getAssignedFlight() != null ? escapeJson(b.getAssignedFlight().getFlightId()) : "UNASSIGNED").append("\",")
+                  .append("\"originAirport\":\"").append(escapeJson(b.getOriginAirport())).append("\",")
+                  .append("\"destinationAirport\":\"").append(escapeJson(b.getDestinationAirport())).append("\",")
+                  .append("\"currentLocation\":\"").append(escapeJson(b.getCurrentLocation())).append("\",")
+                  .append("\"destinationNode\":\"").append(escapeJson(b.getDestinationNode() != null ? b.getDestinationNode() : "")).append("\",")
+                  .append("\"cutoff\":\"").append(b.getFormattedCutoff()).append("\",")
+                  .append("\"cleared\":").append(b.isOperatorCleared()).append(",")
+                  .append("\"clearanceReason\":\"").append(escapeJson(b.getClearanceReason())).append("\",")
+                  .append("\"status\":\"").append(b.getStatus()).append("\",")
+                  .append("\"estimatedTime\":").append(b.getEstimatedTime()).append(",")
+                  .append("\"updatedAt\":\"").append(escapeJson(b.getUpdatedAt())).append("\",")
+                  .append("\"route\":[");
+                List<String> r = b.getCurrentRoute();
+                if (r != null) {
+                    for (int j = 0; j < r.size(); j++) {
+                        if (j > 0) sb.append(",");
+                        sb.append("\"").append(escapeJson(r.get(j))).append("\"");
+                    }
+                }
+                sb.append("]}");
+            }
+            sb.append("],\"conveyors\":[");
+
+            List<ConveyorSegment> segments = baggageService.getConveyorPlanner().getAllSegments();
+            for (int i = 0; i < segments.size(); i++) {
+                ConveyorSegment s = segments.get(i);
+                if (i > 0) sb.append(",");
+                sb.append("{")
+                  .append("\"fromNode\":\"").append(escapeJson(s.getFromNode())).append("\",")
+                  .append("\"toNode\":\"").append(escapeJson(s.getToNode())).append("\",")
+                  .append("\"processingTime\":").append(s.getProcessingTime()).append(",")
+                  .append("\"available\":").append(s.isAvailable())
+                  .append("}");
+            }
+            sb.append("],\"simulatedTime\":").append(baggageService.getSimulatedTime())
+              .append(",\"formattedTime\":\"").append(escapeJson(baggageService.getFormattedSimulatedTime()))
+              .append("\"}");
+
+            sendResponse(exchange, 200, sb.toString());
+        }
+    }
+
     static class BaggageTrackHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
@@ -647,16 +756,36 @@ public class Main {
               .append("\"originAirport\":\"").append(escapeJson(bag.getOriginAirport())).append("\",")
               .append("\"destinationAirport\":\"").append(escapeJson(bag.getDestinationAirport())).append("\",")
               .append("\"cutoff\":\"").append(bag.getFormattedCutoff()).append("\",")
+              .append("\"loadingCutoff\":").append(bag.getLoadingCutoff()).append(",")
               .append("\"estimatedTime\":").append(estTime).append(",")
               .append("\"cleared\":").append(bag.isOperatorCleared()).append(",")
               .append("\"clearanceReason\":\"").append(escapeJson(bag.getClearanceReason())).append("\",")
+              .append("\"updatedAt\":\"").append(escapeJson(bag.getUpdatedAt())).append("\",")
               .append("\"simulatedTime\":").append(baggageService.getSimulatedTime()).append(",")
               .append("\"formattedSimulatedTime\":\"").append(baggageService.getFormattedSimulatedTime()).append("\",")
+              .append("\"hasValidRoute\":").append(route != null && !route.isEmpty()).append(",")
+              .append("\"noRouteReason\":\"").append((route != null && !route.isEmpty()) ? "" : "No available conveyor route from " + bag.getCurrentLocation() + " to " + (dest != null ? dest : "destination")).append("\",")
               .append("\"route\":[");
             if (route != null) {
                 for (int i = 0; i < route.size(); i++) {
                     if (i > 0) sb.append(",");
                     sb.append("\"").append(escapeJson(route.get(i))).append("\"");
+                }
+            }
+            sb.append("],\"completedRoute\":[");
+            List<String> completed = bag.getCompletedRoute();
+            if (completed != null) {
+                for (int i = 0; i < completed.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(completed.get(i))).append("\"");
+                }
+            }
+            sb.append("],\"remainingRoute\":[");
+            List<String> remaining = bag.getRemainingRoute();
+            if (remaining != null) {
+                for (int i = 0; i < remaining.size(); i++) {
+                    if (i > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(remaining.get(i))).append("\"");
                 }
             }
             sb.append("],\"history\":[");

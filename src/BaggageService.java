@@ -76,13 +76,14 @@ public class BaggageService {
         bays.put("BAY-C", new LoadingBay("BAY-C"));
         bays.put("BAY-D", new LoadingBay("BAY-D"));
 
-        // Initialize clean demonstration dataset if database is empty
-        if (!DatabaseManager.hasData("Flight") || !DatabaseManager.hasData("Passenger")) {
+        // Initialize clean demonstration dataset ONLY if database tables are empty
+        if (!DatabaseManager.hasData("Flight") || !DatabaseManager.hasData("Passenger") || !DatabaseManager.hasData("Baggage")) {
             initializeCleanSampleData();
         } else {
             DatabaseManager.loadFlights(this);
             loadPassengersFromDB();
             DatabaseManager.loadBaggage(this);
+            DatabaseManager.validateAndRepairBaggageRecords(this);
         }
     }
 
@@ -181,19 +182,10 @@ public class BaggageService {
             DatabaseManager.savePassenger(p);
         }
 
-        // 3. User accounts for the 3 primary roles
-        ensureDemoUser("admin", "admin123", Role.ADMIN, false, null);
-        ensureDemoUser("manager", "manager123", Role.BAGGAGE_MANAGER, true, null); // Has clearance authority
-        ensureDemoUser("ramesh", "pass123", Role.PASSENGER, false, "P101");
-        ensureDemoUser("priya", "pass123", Role.PASSENGER, false, "P102");
-        ensureDemoUser("rajesh", "pass123", Role.PASSENGER, false, "P103");
-        ensureDemoUser("ananya", "pass123", Role.PASSENGER, false, "P104");
-        ensureDemoUser("vikram", "pass123", Role.PASSENGER, false, "P105");
-        ensureDemoUser("sneha", "pass123", Role.PASSENGER, false, "P108");
-        ensureDemoUser("david", "pass123", Role.PASSENGER, false, "P111");
-        ensureDemoUser("fatima", "pass123", Role.PASSENGER, false, "P112");
+        // 3. User account creation uses the administrator setup and registration process.
+        // Hardcoded demo accounts with known passwords are not created automatically.
 
-        // 4. Realistic baggage records (32 unique records across workflows)
+        // 4. Realistic synthetic baseline baggage records (32 unique records across workflows)
         // Multi-bag example 1: Ramesh Kumar (P101) has 4 bags
         createSampleBag("BAG-101", "P101", "Ramesh Kumar", BaggageDirection.OUTGOING, f101, PassengerCategory.BUSINESS, 1,
                 "CHECK-IN", "BAY-A", false, "", BaggageStatus.AWAITING_CLEARANCE);
@@ -284,14 +276,6 @@ public class BaggageService {
                 "BAY-D", "BAY-D", true, "Transit security approved", BaggageStatus.LOADED);
 
         DatabaseManager.logAudit("SYSTEM", "INITIALIZE_SAMPLE_DATA", "System", simulatedTime, "SUCCESS", "32-record demonstration dataset created");
-    }
-
-    private void ensureDemoUser(String username, String password, Role role, boolean clearance, String linkedPassengerId) {
-        if (DatabaseManager.getUser(username) == null) {
-            String[] hashSalt = AuthManager.hashPassword(password);
-            User user = new User(username, hashSalt[0], hashSalt[1], role, clearance, true, linkedPassengerId);
-            DatabaseManager.saveUser(user);
-        }
     }
 
     private Baggage createSampleBag(String bagId, String pId, String pName, BaggageDirection dir, Flight flight,
@@ -512,6 +496,22 @@ public class BaggageService {
         String nextNode = result.route.get(1);
         int segmentTime = result.totalTime;
 
+        // Validate physical conveyor segment availability
+        boolean segmentAvailable = false;
+        if (conveyorPlanner.getAdjacencyList().containsKey(startLoc)) {
+            for (ConveyorSegment seg : conveyorPlanner.getAdjacencyList().get(startLoc)) {
+                if (seg.getToNode().equals(nextNode) && seg.isAvailable()) {
+                    segmentAvailable = true;
+                    break;
+                }
+            }
+        }
+        if (!segmentAvailable) {
+            bag.setStatus(BaggageStatus.EXCEPTION);
+            DatabaseManager.saveBaggage(bag);
+            throw new IllegalStateException("Conveyor segment from " + startLoc + " to " + nextNode + " is currently offline or failed.");
+        }
+
         bag.setCurrentLocation(nextNode);
         bag.setStatus(BaggageStatus.IN_TRANSIT);
         DatabaseManager.saveRoutingRecord(bag.getBagId(), startLoc, nextNode, segmentTime, "IN_TRANSIT", simulatedTime);
@@ -522,18 +522,55 @@ public class BaggageService {
                 bag.setStatus(BaggageStatus.AT_COLLECTION_POINT);
             } else {
                 bag.setStatus(BaggageStatus.AT_LOADING_BAY);
-                int estArrival = simulatedTime + result.totalTime;
+                int estArrival = simulatedTime + segmentTime;
                 if (estArrival > bag.getLoadingCutoff() && bag.getLoadingCutoff() > 0) {
                     bag.setStatus(BaggageStatus.MISSED_CUTOFF);
                 } else {
                     bag.setStatus(BaggageStatus.LOADED);
                 }
             }
+            bag.setCurrentRoute(Collections.singletonList(endLoc));
+            bag.setEstimatedTime(0);
+        } else {
+            // Recalculate remaining route and ETA from the confirmed new node
+            RoutingResult remainingRes = conveyorPlanner.getShortestPath(nextNode, endLoc);
+            if (remainingRes != null) {
+                bag.setCurrentRoute(remainingRes.route);
+                bag.setEstimatedTime(remainingRes.totalTime);
+                if (!bag.isIncomingBag() && bag.getLoadingCutoff() > 0 && (simulatedTime + remainingRes.totalTime > bag.getLoadingCutoff())) {
+                    bag.setStatus(BaggageStatus.MISSED_CUTOFF);
+                }
+            } else {
+                bag.setStatus(BaggageStatus.EXCEPTION);
+                bag.setEstimatedTime(-1);
+            }
         }
 
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.logAudit(user.getUsername(), "STEP_BAGGAGE", bagId, simulatedTime, "SUCCESS",
                 startLoc + " -> " + nextNode + " (" + bag.getStatus() + ")");
+        return bag;
+    }
+
+    public Baggage collectBaggage(String bagId, User user) {
+        Baggage bag = allBaggage.get(bagId);
+        if (bag == null) throw new IllegalArgumentException("Unknown Baggage ID: " + bagId);
+
+        if (!bag.isIncomingBag()) {
+            throw new IllegalStateException("Only incoming baggage can be claimed at collection point.");
+        }
+
+        String loc = bag.getCurrentLocation();
+        if (loc == null || (!loc.startsWith("CLAIM-CAROUSEL") && !loc.equals("CLAIM-AREA"))) {
+            throw new IllegalStateException("Baggage has not yet reached a collection carousel. Current location: " + loc);
+        }
+
+        AuthManager.requirePassengerAccess(user, bag.getPassengerId());
+
+        bag.setStatus(BaggageStatus.COLLECTED);
+        DatabaseManager.saveBaggage(bag);
+        DatabaseManager.saveRoutingRecord(bagId, loc, loc, 0, "COLLECTED", simulatedTime);
+        DatabaseManager.logAudit(user.getUsername(), "COLLECT_BAGGAGE", bagId, simulatedTime, "SUCCESS", "Claimed at " + loc);
         return bag;
     }
 

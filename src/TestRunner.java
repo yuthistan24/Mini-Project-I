@@ -69,6 +69,11 @@ public class TestRunner {
     // 1. Initial administrator setup and login
     private static void testAdminSetupAndLogin() {
         System.out.println("\n[Test Suite 1] Initial Administrator Setup and Login");
+        // Initial setup creates administrator via security provisioning
+        String[] hs = AuthManager.hashPassword("admin123");
+        User initialAdmin = new User("admin", hs[0], hs[1], Role.ADMIN, false, true, null);
+        DatabaseManager.saveUser(initialAdmin);
+
         User admin = DatabaseManager.getUser("admin");
         assertTrue(admin != null, "Default admin user exists");
         assertTrue(admin.getRole() == Role.ADMIN, "Admin account has ADMIN role");
@@ -89,6 +94,13 @@ public class TestRunner {
         assertTrue(retrieved != null, "Admin-created staff account saved in database");
         assertTrue(retrieved.getRole() == Role.BAGGAGE_MANAGER, "Role correctly assigned as BAGGAGE_MANAGER");
         assertTrue(retrieved.hasClearanceAuthority(), "Clearance authority flag properly stored");
+
+        // Administrator provisions operational manager and passenger accounts
+        String[] hsMgr = AuthManager.hashPassword("manager123");
+        DatabaseManager.saveUser(new User("manager", hsMgr[0], hsMgr[1], Role.BAGGAGE_MANAGER, true, true, null));
+
+        String[] hsPass = AuthManager.hashPassword("pass123");
+        DatabaseManager.saveUser(new User("ramesh", hsPass[0], hsPass[1], Role.PASSENGER, false, true, "P101"));
     }
 
     // 3. Baggage-manager login and permitted operations

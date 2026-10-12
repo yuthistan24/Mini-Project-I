@@ -19,7 +19,13 @@ document.addEventListener('DOMContentLoaded', () => {
         conveyorList: [],
         bagFilter: 'ALL',
         searchQuery: '',
-        activeTrackedBagId: null
+        activeTrackedBagId: null,
+        trackingMode: 'ALL',
+        trackingSelectedBagId: null,
+        pollingActive: true,
+        pollingTimer: null,
+        liveTrackingData: { baggage: [], conveyors: [] },
+        liveManifestFilter: { query: '', direction: 'ALL', status: 'ALL' }
     };
 
     // DOM Elements
@@ -35,6 +41,7 @@ document.addEventListener('DOMContentLoaded', () => {
     checkExistingSession();
     setupAuthListeners();
     setupNavigation();
+    setupLiveTracking();
     setupBaggageListeners();
     setupPassengerListeners();
     setupFlightListeners();
@@ -79,6 +86,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Navigation elements
         const navPassenger = document.getElementById('nav-item-passenger');
+        const navTracking = document.getElementById('nav-item-tracking');
         const navDashboard = document.getElementById('nav-item-dashboard');
         const navBaggage = document.getElementById('nav-item-baggage');
         const navPassengers = document.getElementById('nav-item-passengers');
@@ -92,6 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (isPassenger) {
             if (navPassenger) navPassenger.style.display = 'block';
+            if (navTracking) navTracking.style.display = 'none';
             if (navDashboard) navDashboard.style.display = 'none';
             if (navBaggage) navBaggage.style.display = 'none';
             if (navPassengers) navPassengers.style.display = 'none';
@@ -108,6 +117,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('passenger-banner-id').innerText = state.linkedPassengerId || 'P-SELF';
         } else {
             if (navPassenger) navPassenger.style.display = 'none';
+            if (navTracking) navTracking.style.display = 'block';
             if (navDashboard) navDashboard.style.display = 'block';
             if (navBaggage) navBaggage.style.display = 'block';
             if (navPassengers) navPassengers.style.display = 'block';
@@ -122,6 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function showLogin() {
+        stopLivePolling();
         loginScreen.classList.add('active');
         registerScreen.classList.remove('active');
         dashboardScreen.classList.remove('active');
@@ -138,6 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
             switchView('dashboard');
         }
         loadAllData();
+        startLivePolling();
     }
 
     function setupAuthListeners() {
@@ -152,17 +164,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
-        // Demo login pills
-        document.querySelectorAll('.demo-pill').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const user = btn.getAttribute('data-user');
-                const pass = btn.getAttribute('data-pass');
-                document.getElementById('username').value = user;
-                document.getElementById('password').value = pass;
-                handleLogin();
-            });
-        });
-
         // Login submit
         document.getElementById('login-btn').addEventListener('click', handleLogin);
         document.getElementById('password').addEventListener('keypress', (e) => {
@@ -171,6 +172,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Logout
         document.getElementById('logout-btn').addEventListener('click', async () => {
+            stopLivePolling();
             await fetch('/api/logout', { method: 'POST' });
             state.currentUser = null;
             state.currentRole = null;
@@ -347,6 +349,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Update top heading
         const headings = {
+            'tracking': { title: 'Live Baggage Tracking', sub: 'Node-Based Conveyor Network & Real-Time SQLite Baggage Manifest' },
             'dashboard': { title: 'Operations Dashboard', sub: 'Real-Time Flight Cutoff & Baggage Flow Monitoring' },
             'passenger-portal': { title: 'Passenger Baggage Tracking', sub: 'Self-Service Baggage Status & Route Checkpoint Progress' },
             'baggage': { title: 'Baggage Operations', sub: 'Two-Way Handling, Priority Routing & Node Dispatch' },
@@ -361,6 +364,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (headings[viewName]) {
             pageHeading.innerText = headings[viewName].title;
             pageSubheading.innerText = headings[viewName].sub;
+        }
+
+        if (viewName === 'tracking') {
+            pollLiveTracking();
         }
     }
 
@@ -683,6 +690,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('pass-track-eta').innerText = (b.estimatedTime >= 0) ? `${b.estimatedTime} Mins` : 'N/A';
 
                 renderVisualPathway('passenger-visual-route', b);
+                renderConveyorNetworkSvg('passenger-conveyor-svg', state.baggageList, state.conveyorList, b);
             }
         } catch (e) {
             console.error('Error fetching passenger route', e);
@@ -1519,5 +1527,642 @@ document.addEventListener('DOMContentLoaded', () => {
             toast.style.transition = 'all 0.3s ease-out';
             setTimeout(() => toast.remove(), 300);
         }, 3500);
+    }
+
+    // ==================== LIVE BAGGAGE TRACKING & CONVEYOR GRAPH ====================
+
+    const POLLING_INTERVAL_MS = 2500;
+
+    const NETWORK_NODE_LAYOUT = {
+        'CHECK-IN': { x: 90, y: 110, label: 'CHECK-IN', sub: 'Origins' },
+        'UNLOAD-POINT': { x: 90, y: 390, label: 'UNLOAD', sub: 'Arrivals' },
+        'SORTING': { x: 260, y: 110, label: 'SORTING', sub: 'Main Hub' },
+        'TRANSFER-B': { x: 430, y: 80, label: 'XFER-B', sub: 'Express' },
+        'TRANSFER-A': { x: 430, y: 250, label: 'XFER-A', sub: 'Transfer' },
+        'CENTRAL': { x: 600, y: 180, label: 'CENTRAL', sub: 'Router' },
+        'BAY-AREA': { x: 760, y: 120, label: 'BAY-AREA', sub: 'Manifold' },
+        'BAY-A': { x: 940, y: 50, label: 'BAY-A', sub: 'AI101' },
+        'BAY-B': { x: 940, y: 110, label: 'BAY-B', sub: 'EK502' },
+        'BAY-C': { x: 940, y: 170, label: 'BAY-C', sub: '6E204' },
+        'BAY-D': { x: 940, y: 230, label: 'BAY-D', sub: 'BA118' },
+        'CLAIM-AREA': { x: 760, y: 390, label: 'CLAIM-AREA', sub: 'Arrivals' },
+        'CLAIM-CAROUSEL-1': { x: 940, y: 350, label: 'CAROUSEL-1', sub: 'Domestic' },
+        'CLAIM-CAROUSEL-2': { x: 940, y: 430, label: 'CAROUSEL-2', sub: 'Intl' }
+    };
+
+    function setupLiveTracking() {
+        // Mode Toggles
+        const btnModeAll = document.getElementById('btn-mode-all');
+        const btnModeSingle = document.getElementById('btn-mode-single');
+        const singlePanel = document.getElementById('live-single-bag-panel');
+        const allPanel = document.getElementById('live-all-bags-panel');
+
+        if (btnModeAll && btnModeSingle) {
+            btnModeAll.addEventListener('click', () => {
+                state.trackingMode = 'ALL';
+                state.trackingSelectedBagId = null;
+                btnModeAll.classList.add('active');
+                btnModeSingle.classList.remove('active');
+                if (singlePanel) singlePanel.style.display = 'none';
+                if (allPanel) allPanel.style.display = 'block';
+                const clearBtn = document.getElementById('btn-tracking-clear-search');
+                if (clearBtn) clearBtn.style.display = 'none';
+                const searchInp = document.getElementById('tracking-quick-search-input');
+                if (searchInp) searchInp.value = '';
+                renderLiveConveyorGraph();
+            });
+
+            btnModeSingle.addEventListener('click', () => {
+                state.trackingMode = 'SINGLE';
+                btnModeSingle.classList.add('active');
+                btnModeAll.classList.remove('active');
+                if (!state.trackingSelectedBagId && state.liveTrackingData.baggage.length > 0) {
+                    selectBagForTracking(state.liveTrackingData.baggage[0].bagId);
+                } else if (state.trackingSelectedBagId) {
+                    selectBagForTracking(state.trackingSelectedBagId);
+                }
+            });
+        }
+
+        // Quick Search
+        const searchInput = document.getElementById('tracking-quick-search-input');
+        const searchBtn = document.getElementById('btn-tracking-quick-search');
+        const clearBtn = document.getElementById('btn-tracking-clear-search');
+
+        if (searchBtn && searchInput) {
+            const doSearch = () => {
+                const query = searchInput.value.trim().toUpperCase();
+                if (!query) return;
+                const match = state.liveTrackingData.baggage.find(b => b.bagId.toUpperCase() === query);
+                if (match) {
+                    selectBagForTracking(match.bagId);
+                    if (clearBtn) clearBtn.style.display = 'inline-block';
+                } else {
+                    fetch(`/api/baggage/track?id=${encodeURIComponent(query)}`)
+                        .then(r => r.ok ? r.json() : null)
+                        .then(b => {
+                            if (b && b.bagId) {
+                                selectBagForTracking(b.bagId);
+                                if (clearBtn) clearBtn.style.display = 'inline-block';
+                            } else {
+                                showToast(`Baggage ID "${query}" not found in database.`, 'error');
+                            }
+                        })
+                        .catch(() => showToast('Error querying baggage ID', 'error'));
+                }
+            };
+
+            searchBtn.addEventListener('click', doSearch);
+            searchInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') doSearch();
+            });
+        }
+
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => {
+                if (searchInput) searchInput.value = '';
+                clearBtn.style.display = 'none';
+                if (btnModeAll) btnModeAll.click();
+            });
+        }
+
+        // Poll Controls
+        const refreshBtn = document.getElementById('btn-tracking-refresh');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => {
+                pollLiveTracking();
+                showToast('Polled database successfully', 'info');
+            });
+        }
+
+        const pollToggleBtn = document.getElementById('btn-tracking-toggle-poll');
+        if (pollToggleBtn) {
+            pollToggleBtn.addEventListener('click', () => {
+                state.pollingActive = !state.pollingActive;
+                if (state.pollingActive) {
+                    pollToggleBtn.innerText = '⏸️';
+                    pollToggleBtn.title = 'Pause live polling';
+                    startLivePolling();
+                    showToast('Live database polling resumed (2.5s)', 'info');
+                } else {
+                    pollToggleBtn.innerText = '▶️';
+                    pollToggleBtn.title = 'Resume live polling';
+                    stopLivePolling();
+                    const statusBadge = document.getElementById('tracking-poll-status');
+                    if (statusBadge) {
+                        statusBadge.className = 'poll-badge paused';
+                        statusBadge.innerText = '⏸️ Polling Paused';
+                    }
+                    showToast('Live database polling paused', 'info');
+                }
+            });
+        }
+
+        // Manifest Filter Controls
+        const filterQuery = document.getElementById('live-table-filter-query');
+        if (filterQuery) {
+            filterQuery.addEventListener('input', (e) => {
+                state.liveManifestFilter.query = e.target.value.trim().toLowerCase();
+                renderLiveManifestTable();
+            });
+        }
+
+        const filterDir = document.getElementById('live-table-filter-direction');
+        if (filterDir) {
+            filterDir.addEventListener('change', (e) => {
+                state.liveManifestFilter.direction = e.target.value;
+                renderLiveManifestTable();
+            });
+        }
+
+        const filterStatus = document.getElementById('live-table-filter-status');
+        if (filterStatus) {
+            filterStatus.addEventListener('change', (e) => {
+                state.liveManifestFilter.status = e.target.value;
+                renderLiveManifestTable();
+            });
+        }
+
+        // Mode B Actions
+        const closeInspectorBtn = document.getElementById('btn-live-single-close');
+        if (closeInspectorBtn && btnModeAll) {
+            closeInspectorBtn.addEventListener('click', () => {
+                btnModeAll.click();
+            });
+        }
+
+        const advanceBtn = document.getElementById('btn-live-single-advance');
+        if (advanceBtn) {
+            advanceBtn.addEventListener('click', async () => {
+                if (!state.trackingSelectedBagId) return;
+                try {
+                    advanceBtn.disabled = true;
+                    const res = await fetch('/api/baggage/step', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ bagId: state.trackingSelectedBagId })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`Bag ${state.trackingSelectedBagId} moved to ${data.currentLocation} (${data.status})`, 'success');
+                        await pollLiveTracking();
+                    } else {
+                        showToast(data.error || 'Failed to advance baggage', 'error');
+                    }
+                } catch (e) {
+                    showToast('Connection error', 'error');
+                } finally {
+                    advanceBtn.disabled = false;
+                }
+            });
+        }
+
+        const collectBtn = document.getElementById('btn-live-single-collect');
+        if (collectBtn) {
+            collectBtn.addEventListener('click', async () => {
+                if (!state.trackingSelectedBagId) return;
+                try {
+                    collectBtn.disabled = true;
+                    const res = await fetch('/api/baggage/collect', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ bagId: state.trackingSelectedBagId })
+                    });
+                    const data = await res.json();
+                    if (res.ok) {
+                        showToast(`Bag ${state.trackingSelectedBagId} successfully collected!`, 'success');
+                        await pollLiveTracking();
+                    } else {
+                        showToast(data.error || 'Failed to collect baggage', 'error');
+                    }
+                } catch (e) {
+                    showToast('Connection error', 'error');
+                } finally {
+                    collectBtn.disabled = false;
+                }
+            });
+        }
+
+        // Tab visibility listener
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                stopLivePolling();
+            } else if (state.pollingActive && state.currentUser) {
+                startLivePolling();
+            }
+        });
+    }
+
+    function startLivePolling() {
+        stopLivePolling();
+        pollLiveTracking();
+        state.pollingTimer = setInterval(pollLiveTracking, POLLING_INTERVAL_MS);
+    }
+
+    function stopLivePolling() {
+        if (state.pollingTimer) {
+            clearInterval(state.pollingTimer);
+            state.pollingTimer = null;
+        }
+    }
+
+    async function pollLiveTracking() {
+        try {
+            const res = await fetch('/api/tracking/live');
+            if (!res.ok) {
+                const statusBadge = document.getElementById('tracking-poll-status');
+                if (statusBadge) {
+                    statusBadge.className = 'poll-badge error';
+                    statusBadge.innerText = '⚠️ Server Reconnecting';
+                }
+                return;
+            }
+
+            const data = await res.json();
+            state.liveTrackingData = data;
+            state.baggageList = data.baggage || [];
+            state.conveyorList = data.conveyors || [];
+
+            // Update status badge & last polled timestamp
+            const statusBadge = document.getElementById('tracking-poll-status');
+            if (statusBadge && state.pollingActive) {
+                statusBadge.className = 'poll-badge online';
+                statusBadge.innerText = '🟢 Polling Active (2.5s)';
+            }
+            const lastPolledEl = document.getElementById('tracking-last-polled');
+            if (lastPolledEl) {
+                const now = new Date();
+                lastPolledEl.innerText = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            }
+
+            const bagsCountBadge = document.getElementById('graph-bags-count-badge');
+            if (bagsCountBadge) {
+                bagsCountBadge.innerText = `${(data.baggage || []).length} Bags on Network`;
+            }
+
+            // If active view is tracking, refresh table, inspector & graph
+            if (state.currentView === 'tracking') {
+                renderLiveManifestTable();
+                if (state.trackingMode === 'SINGLE' && state.trackingSelectedBagId) {
+                    refreshSingleBagInspector(state.trackingSelectedBagId);
+                } else {
+                    renderLiveConveyorGraph();
+                }
+            }
+
+            // If active view is passenger-portal, refresh passenger cards & route
+            if (state.currentView === 'passenger-portal') {
+                renderPassengerBags();
+                if (state.activeTrackedBagId) {
+                    renderPassengerLiveRoute(state.activeTrackedBagId);
+                }
+            }
+        } catch (e) {
+            const statusBadge = document.getElementById('tracking-poll-status');
+            if (statusBadge) {
+                statusBadge.className = 'poll-badge error';
+                statusBadge.innerText = '⚠️ Network Disconnected';
+            }
+        }
+    }
+
+    async function selectBagForTracking(bagId) {
+        state.trackingMode = 'SINGLE';
+        state.trackingSelectedBagId = bagId;
+
+        const btnModeSingle = document.getElementById('btn-mode-single');
+        const btnModeAll = document.getElementById('btn-mode-all');
+        if (btnModeSingle) btnModeSingle.classList.add('active');
+        if (btnModeAll) btnModeAll.classList.remove('active');
+
+        const singlePanel = document.getElementById('live-single-bag-panel');
+        if (singlePanel) singlePanel.style.display = 'block';
+
+        const searchInp = document.getElementById('tracking-quick-search-input');
+        if (searchInp) searchInp.value = bagId;
+        const clearBtn = document.getElementById('btn-tracking-clear-search');
+        if (clearBtn) clearBtn.style.display = 'inline-block';
+
+        await refreshSingleBagInspector(bagId);
+    }
+
+    async function refreshSingleBagInspector(bagId) {
+        try {
+            const res = await fetch(`/api/baggage/track?id=${encodeURIComponent(bagId)}`);
+            if (!res.ok) return;
+            const b = await res.json();
+
+            // Populate Single Bag Info
+            const titleEl = document.getElementById('live-single-bag-title');
+            if (titleEl) titleEl.innerText = `Baggage Tag: ${b.bagId}`;
+
+            const subEl = document.getElementById('live-single-meta-sub');
+            if (subEl) subEl.innerText = `Passenger: ${b.passengerName} (${b.passengerId}) • Flight: ${b.flightId || 'N/A'}`;
+
+            const statusBadge = document.getElementById('live-single-status-badge');
+            if (statusBadge) statusBadge.innerHTML = getStatusBadge(b.status);
+
+            const dirBadge = document.getElementById('live-single-direction-badge');
+            if (dirBadge) dirBadge.innerText = b.direction;
+
+            document.getElementById('live-single-cur-node').innerText = b.currentLocation || '-';
+            document.getElementById('live-single-dest-node').innerText = b.destinationNode || '-';
+            document.getElementById('live-single-flight').innerText = b.flightId || 'N/A';
+            document.getElementById('live-single-airports').innerText = `${b.originAirport} → ${b.destinationAirport} (${b.direction})`;
+            document.getElementById('live-single-eta').innerText = (b.estimatedTime >= 0) ? `${b.estimatedTime} Mins (Calculated by Dijkstra)` : 'N/A';
+            document.getElementById('live-single-cutoff').innerText = b.cutoff || 'N/A';
+            document.getElementById('live-single-clearance').innerText = b.cleared ? '✅ Verified Cleared' : '⏳ Awaiting Screening Clearance';
+            document.getElementById('live-single-updated').innerText = b.updatedAt || 'Recent';
+
+            // Show/Hide collect button
+            const collectBtn = document.getElementById('btn-live-single-collect');
+            if (collectBtn) {
+                const canCollect = (b.direction === 'INCOMING' && (b.currentLocation.startsWith('CLAIM-CAROUSEL') || b.status === 'ARRIVED_COLLECTION') && b.status !== 'COLLECTED');
+                collectBtn.style.display = canCollect ? 'inline-flex' : 'none';
+            }
+
+            // Checkpoints visual route
+            renderVisualPathway('live-single-visual-route', b);
+
+            // History table
+            const histBody = document.getElementById('live-single-history-body');
+            if (histBody) {
+                const history = b.history || [];
+                if (history.length === 0) {
+                    histBody.innerHTML = `<tr><td colspan="6" class="subtext" style="text-align:center;">No movement recorded yet.</td></tr>`;
+                } else {
+                    histBody.innerHTML = history.map((h, idx) => `
+                        <tr>
+                            <td>${idx + 1}</td>
+                            <td><code>${h.from}</code></td>
+                            <td><code>${h.to}</code></td>
+                            <td>${getStatusBadge(h.status)}</td>
+                            <td>${h.time}m</td>
+                            <td class="subtext">${h.timestamp}</td>
+                        </tr>
+                    `).join('');
+                }
+            }
+
+            // Render Graph with highlighted single bag
+            renderConveyorNetworkSvg('live-conveyor-svg', state.liveTrackingData.baggage, state.liveTrackingData.conveyors, b);
+        } catch (e) {
+            console.error('Error refreshing single bag', e);
+        }
+    }
+
+    function renderLiveManifestTable() {
+        const tbody = document.getElementById('live-tracking-manifest-body');
+        if (!tbody) return;
+
+        let list = state.liveTrackingData.baggage || [];
+        const { query, direction, status } = state.liveManifestFilter;
+
+        if (query) {
+            list = list.filter(b => 
+                b.bagId.toLowerCase().includes(query) ||
+                b.passengerName.toLowerCase().includes(query) ||
+                b.passengerId.toLowerCase().includes(query) ||
+                (b.flightId && b.flightId.toLowerCase().includes(query)) ||
+                b.currentLocation.toLowerCase().includes(query) ||
+                (b.destinationNode && b.destinationNode.toLowerCase().includes(query))
+            );
+        }
+
+        if (direction !== 'ALL') {
+            list = list.filter(b => b.direction === direction);
+        }
+
+        if (status !== 'ALL') {
+            list = list.filter(b => b.status === status);
+        }
+
+        if (list.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding: 2rem;" class="subtext">No baggage records match the selected filter.</td></tr>`;
+            return;
+        }
+
+        tbody.innerHTML = list.map(b => {
+            const isSelected = (state.trackingSelectedBagId === b.bagId);
+            return `
+                <tr class="${isSelected ? 'row-selected' : ''}" style="${isSelected ? 'background-color: #eff6ff;' : ''}">
+                    <td><strong>${b.bagId}</strong></td>
+                    <td>${b.passengerName} <span class="subtext">(${b.passengerId})</span></td>
+                    <td><span class="badge badge-outline">${b.flightId || 'Arrival'}</span></td>
+                    <td>${b.direction}</td>
+                    <td><code>${b.currentLocation}</code></td>
+                    <td><code>${b.destinationNode || '-'}</code></td>
+                    <td>${getStatusBadge(b.status)}</td>
+                    <td>${b.cleared ? '✅ Cleared' : '⏳ Pending'}</td>
+                    <td>${(b.estimatedTime >= 0) ? b.estimatedTime + 'm' : 'N/A'}</td>
+                    <td class="subtext">${b.updatedAt || '-'}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary btn-track-manifest" data-id="${b.bagId}">
+                            🎯 Track
+                        </button>
+                    </td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('.btn-track-manifest').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const bagId = btn.getAttribute('data-id');
+                selectBagForTracking(bagId);
+            });
+        });
+    }
+
+    function renderLiveConveyorGraph() {
+        renderConveyorNetworkSvg('live-conveyor-svg', state.liveTrackingData.baggage, state.liveTrackingData.conveyors, null);
+    }
+
+    function renderConveyorNetworkSvg(svgElementId, baggageList, conveyorList, selectedBagDetail) {
+        const svg = document.getElementById(svgElementId);
+        if (!svg) return;
+
+        baggageList = baggageList || [];
+        conveyorList = conveyorList || [];
+
+        // Map bags by currentLocation
+        const bagsByLoc = {};
+        baggageList.forEach(b => {
+            const loc = b.currentLocation;
+            if (loc) {
+                if (!bagsByLoc[loc]) bagsByLoc[loc] = [];
+                bagsByLoc[loc].push(b);
+            }
+        });
+
+        // Determine route segments for selectedBagDetail
+        const completedSegments = new Set();
+        const remainingSegments = new Set();
+
+        if (selectedBagDetail) {
+            const completed = selectedBagDetail.completedRoute || [];
+            for (let i = 0; i < completed.length - 1; i++) {
+                completedSegments.add(`${completed[i]}->${completed[i + 1]}`);
+            }
+
+            const remaining = selectedBagDetail.remainingRoute || selectedBagDetail.route || [];
+            for (let i = 0; i < remaining.length - 1; i++) {
+                remainingSegments.add(`${remaining[i]}->${remaining[i + 1]}`);
+            }
+        }
+
+        // Build defs with arrow markers
+        let svgContent = `
+            <defs>
+                <marker id="arrow-default-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#94a3b8"/>
+                </marker>
+                <marker id="arrow-route-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#2563eb"/>
+                </marker>
+                <marker id="arrow-completed-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#10b981"/>
+                </marker>
+                <marker id="arrow-failed-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#ef4444"/>
+                </marker>
+            </defs>
+        `;
+
+        // Render Edges
+        svgContent += `<g class="edges-layer">`;
+        conveyorList.forEach(s => {
+            const u = NETWORK_NODE_LAYOUT[s.fromNode];
+            const v = NETWORK_NODE_LAYOUT[s.toNode];
+            if (!u || !v) return;
+
+            const segKey = `${s.fromNode}->${s.toNode}`;
+            const isFailed = (s.available === false);
+            const isRoute = remainingSegments.has(segKey);
+            const isCompleted = completedSegments.has(segKey);
+
+            let edgeClass = 'conveyor-edge';
+            let markerId = `arrow-default-${svgElementId}`;
+
+            if (isFailed) {
+                edgeClass += ' edge-failed';
+                markerId = `arrow-failed-${svgElementId}`;
+            } else if (isRoute) {
+                edgeClass += ' edge-route';
+                markerId = `arrow-route-${svgElementId}`;
+            } else if (isCompleted) {
+                edgeClass += ' edge-route-completed';
+                markerId = `arrow-completed-${svgElementId}`;
+            }
+
+            svgContent += `<path d="M ${u.x} ${u.y} L ${v.x} ${v.y}" class="${edgeClass}" marker-end="url(#${markerId})"></path>`;
+
+            // Midpoint processing time pill
+            const mx = (u.x + v.x) / 2;
+            const my = (u.y + v.y) / 2;
+            const timeLabel = isFailed ? 'JAM' : `${s.processingTime}m`;
+            const bgFill = isFailed ? '#fee2e2' : (isRoute ? '#dbeafe' : '#ffffff');
+            const textColor = isFailed ? '#b91c1c' : (isRoute ? '#1d4ed8' : '#475569');
+
+            svgContent += `
+                <g transform="translate(${mx}, ${my})">
+                    <rect class="edge-weight-bg" x="-14" y="-8" width="28" height="16" fill="${bgFill}"></rect>
+                    <text class="edge-weight-text" fill="${textColor}">${timeLabel}</text>
+                </g>
+            `;
+        });
+        svgContent += `</g>`;
+
+        // Render Nodes
+        svgContent += `<g class="nodes-layer">`;
+        Object.keys(NETWORK_NODE_LAYOUT).forEach(nodeId => {
+            const pos = NETWORK_NODE_LAYOUT[nodeId];
+            const bagsAtNode = bagsByLoc[nodeId] || [];
+
+            let colorClass = 'node-grey';
+            if (bagsAtNode.length === 0) {
+                if (nodeId.startsWith('TRANSFER')) colorClass = 'node-purple';
+            } else {
+                if (bagsAtNode.some(b => b.status === 'MISSED_CUTOFF' || b.status === 'REJECTED')) {
+                    colorClass = 'node-red';
+                } else if (bagsAtNode.some(b => b.status === 'AWAITING_CLEARANCE')) {
+                    colorClass = 'node-amber';
+                } else if (bagsAtNode.some(b => b.status === 'LOADED' || b.status === 'COLLECTED')) {
+                    colorClass = 'node-green';
+                } else if (bagsAtNode.some(b => b.direction === 'TRANSFER' || nodeId.startsWith('TRANSFER'))) {
+                    colorClass = 'node-purple';
+                } else {
+                    colorClass = 'node-blue';
+                }
+            }
+
+            const isSelectedNode = selectedBagDetail && (selectedBagDetail.currentLocation === nodeId);
+
+            svgContent += `
+                <g class="conveyor-node-group" data-node="${nodeId}" title="${nodeId}: ${bagsAtNode.length} bag(s) present">
+                    <circle class="node-circle ${colorClass} ${isSelectedNode ? 'node-selected' : ''}" cx="${pos.x}" cy="${pos.y}" r="22"></circle>
+                    <text class="node-label" x="${pos.x}" y="${pos.y - 28}">${pos.label}</text>
+                    <text class="node-sublabel" x="${pos.x}" y="${pos.y - 39}">${pos.sub}</text>
+            `;
+
+            // Baggage IDs pill under node
+            if (bagsAtNode.length === 1) {
+                const b = bagsAtNode[0];
+                const isBagSelected = selectedBagDetail && (selectedBagDetail.bagId === b.bagId);
+                const pillFill = isBagSelected ? '#2563eb' : '#0f172a';
+                svgContent += `
+                    <g class="node-bag-pill-group" data-bagid="${b.bagId}">
+                        <rect class="node-bag-pill" x="${pos.x - 30}" y="${pos.y + 25}" width="60" height="17" fill="${pillFill}"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34}">${b.bagId}</text>
+                    </g>
+                `;
+            } else if (bagsAtNode.length === 2) {
+                const b1 = bagsAtNode[0];
+                const b2 = bagsAtNode[1];
+                svgContent += `
+                    <g class="node-bag-pill-group" data-bagid="${b1.bagId}">
+                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 25}" width="64" height="15"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 33}">${b1.bagId}</text>
+                    </g>
+                    <g class="node-bag-pill-group" data-bagid="${b2.bagId}">
+                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 42}" width="64" height="15"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 50}">${b2.bagId}</text>
+                    </g>
+                `;
+            } else if (bagsAtNode.length > 2) {
+                const bagListStr = bagsAtNode.map(b => b.bagId).join(', ');
+                svgContent += `
+                    <g class="node-bag-pill-group" data-bagid="${bagsAtNode[0].bagId}" title="${bagListStr}">
+                        <rect class="node-bag-pill" x="${pos.x - 34}" y="${pos.y + 25}" width="68" height="17" fill="#1e3a8a"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34}">${bagsAtNode.length} Bags</text>
+                    </g>
+                `;
+            }
+
+            svgContent += `</g>`;
+        });
+        svgContent += `</g>`;
+
+        svg.innerHTML = svgContent;
+
+        // Interactive click listeners
+        svg.querySelectorAll('.node-bag-pill-group').forEach(grp => {
+            grp.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const bagId = grp.getAttribute('data-bagid');
+                if (bagId && svgElementId === 'live-conveyor-svg') {
+                    selectBagForTracking(bagId);
+                }
+            });
+        });
+
+        svg.querySelectorAll('.conveyor-node-group').forEach(grp => {
+            grp.addEventListener('click', () => {
+                const nodeId = grp.getAttribute('data-node');
+                const bags = bagsByLoc[nodeId] || [];
+                if (bags.length > 0 && svgElementId === 'live-conveyor-svg') {
+                    selectBagForTracking(bags[0].bagId);
+                }
+            });
+        });
     }
 });

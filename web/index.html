@@ -128,9 +128,16 @@
                             </a>
                         </li>
 
+                        <!-- Live Baggage Tracking (All Baggage & Conveyor Graph) -->
+                        <li id="nav-item-tracking">
+                            <a href="#" class="nav-item" data-target="tracking">
+                                <span class="nav-icon">📍</span> Live Baggage Tracking
+                            </a>
+                        </li>
+
                         <!-- Staff Views -->
                         <li id="nav-item-dashboard">
-                            <a href="#" class="nav-item active" data-target="dashboard">
+                            <a href="#" class="nav-item" data-target="dashboard">
                                 <span class="nav-icon">📊</span> Operations Dashboard
                             </a>
                         </li>
@@ -262,6 +269,206 @@
                                 <span class="legend-item"><span class="legend-dot dot-current"></span> Current Position</span>
                                 <span class="legend-item"><span class="legend-dot dot-upcoming"></span> Next In Route</span>
                                 <span class="legend-item"><span class="legend-dot dot-dest"></span> Destination Bay/Carousel</span>
+                            </div>
+
+                            <h4 class="mt-4 mb-2">Conveyor Network Visualization</h4>
+                            <div class="conveyor-graph-wrapper" id="passenger-conveyor-graph-wrapper">
+                                <svg id="passenger-conveyor-svg" viewBox="0 0 1040 500" preserveAspectRatio="xMidYMid meet"></svg>
+                            </div>
+                        </div>
+                    </section>
+
+                    <!-- ==================== VIEW: LIVE BAGGAGE TRACKING ==================== -->
+                    <section id="view-tracking" class="content-view">
+                        <div class="tracking-top-toolbar">
+                            <div class="tracking-mode-toggle">
+                                <button type="button" class="btn btn-sm btn-mode active" id="btn-mode-all">
+                                    <span>🌐</span> Mode A: Whole-Network Tracking
+                                </button>
+                                <button type="button" class="btn btn-sm btn-mode" id="btn-mode-single">
+                                    <span>🎯</span> Mode B: Track One Baggage ID
+                                </button>
+                            </div>
+
+                            <div class="tracking-search-bar">
+                                <div class="search-input-group">
+                                    <input type="text" id="tracking-quick-search-input" placeholder="Enter Bag Tag ID (e.g. BAG-101)...">
+                                    <button type="button" id="btn-tracking-quick-search" class="btn btn-primary btn-sm">Find &amp; Track</button>
+                                    <button type="button" id="btn-tracking-clear-search" class="btn btn-secondary btn-sm" style="display:none;">Clear</button>
+                                </div>
+                            </div>
+
+                            <div class="tracking-poll-status-card">
+                                <span id="tracking-poll-status" class="poll-badge online">🟢 Polling Active (2.5s)</span>
+                                <span class="subtext">Updated: <strong id="tracking-last-polled">Just now</strong></span>
+                                <button type="button" class="btn btn-sm btn-outline" id="btn-tracking-refresh" title="Poll database immediately">🔄 Refresh</button>
+                                <button type="button" class="btn btn-sm btn-outline" id="btn-tracking-toggle-poll" title="Pause/Resume live polling">⏸️</button>
+                            </div>
+                        </div>
+
+                        <!-- Conveyor Graph Panel -->
+                        <div class="panel mt-3">
+                            <div class="panel-header">
+                                <div>
+                                    <h3>Conveyor Network Graph &amp; Node Positions</h3>
+                                    <span class="subtext">Live graph populated directly from SQLite database connections and Dijkstra shortest-path calculations</span>
+                                </div>
+                                <div class="graph-header-actions">
+                                    <span class="badge badge-info" id="graph-bags-count-badge">0 Bags on Network</span>
+                                </div>
+                            </div>
+
+                            <div class="conveyor-graph-wrapper" id="live-conveyor-graph-wrapper">
+                                <svg id="live-conveyor-svg" viewBox="0 0 1040 500" preserveAspectRatio="xMidYMid meet"></svg>
+                            </div>
+
+                            <!-- Visual Legend -->
+                            <div class="graph-legend-container mt-2">
+                                <div class="legend-group">
+                                    <span class="legend-title">Node States:</span>
+                                    <span class="legend-chip"><span class="node-chip node-chip-grey"></span> Unoccupied</span>
+                                    <span class="legend-chip"><span class="node-chip node-chip-blue"></span> Bag In Transit / Queued</span>
+                                    <span class="legend-chip"><span class="node-chip node-chip-amber"></span> Awaiting Security Clearance</span>
+                                    <span class="legend-chip"><span class="node-chip node-chip-green"></span> Destination Bay / Claimed</span>
+                                    <span class="legend-chip"><span class="node-chip node-chip-red"></span> Missed Cutoff / Exception</span>
+                                    <span class="legend-chip"><span class="node-chip node-chip-purple"></span> Transfer Hub</span>
+                                </div>
+                                <div class="legend-group">
+                                    <span class="legend-title">Conveyor Lines:</span>
+                                    <span class="legend-chip"><span class="edge-line edge-line-normal"></span> Operational Segment (mins)</span>
+                                    <span class="legend-chip"><span class="edge-line edge-line-route"></span> Selected Bag Active Route</span>
+                                    <span class="legend-chip"><span class="edge-line edge-line-failed"></span> Conveyor Jam (Offline)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Mode B: Individual Bag Deep Dive Inspector Panel -->
+                        <div class="panel mt-3" id="live-single-bag-panel" style="display:none;">
+                            <div class="panel-header">
+                                <div>
+                                    <div class="panel-header-badges">
+                                        <span class="badge badge-primary">INDIVIDUAL TRACKING</span>
+                                        <span class="badge" id="live-single-status-badge">STATUS</span>
+                                        <span class="badge badge-outline" id="live-single-direction-badge">DIRECTION</span>
+                                    </div>
+                                    <h3 id="live-single-bag-title">Bag Details</h3>
+                                    <span class="subtext" id="live-single-meta-sub">Owner: -</span>
+                                </div>
+                                <div class="panel-header-actions">
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-live-single-advance" title="Step baggage to next confirmed conveyor node">⏩ Advance Node</button>
+                                    <button type="button" class="btn btn-sm btn-success" id="btn-live-single-collect" title="Collect incoming baggage at carousel" style="display:none;">🛄 Collect Baggage</button>
+                                    <button type="button" class="btn btn-sm btn-secondary" id="btn-live-single-close">✕ Close Inspector</button>
+                                </div>
+                            </div>
+
+                            <div class="single-bag-metrics-grid">
+                                <div class="detail-box">
+                                    <span class="detail-label">Current Node</span>
+                                    <strong class="detail-val" id="live-single-cur-node">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Assigned Destination</span>
+                                    <strong class="detail-val" id="live-single-dest-node">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Flight Reference</span>
+                                    <strong class="detail-val" id="live-single-flight">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Airports / Direction</span>
+                                    <strong class="detail-val" id="live-single-airports">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Estimated Transit Time</span>
+                                    <strong class="detail-val" id="live-single-eta">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Departure / Cutoff Time</span>
+                                    <strong class="detail-val" id="live-single-cutoff">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Screening Clearance</span>
+                                    <strong class="detail-val" id="live-single-clearance">-</strong>
+                                </div>
+                                <div class="detail-box">
+                                    <span class="detail-label">Database Last Updated</span>
+                                    <strong class="detail-val" id="live-single-updated">-</strong>
+                                </div>
+                            </div>
+
+                            <!-- Route Checkpoints -->
+                            <h4 class="mt-3 mb-2">Calculated Route &amp; Node Checkpoints</h4>
+                            <div class="visual-route-container" id="live-single-visual-route"></div>
+
+                            <!-- Movement History -->
+                            <h4 class="mt-3 mb-2">Immutable Movement Event History</h4>
+                            <div class="table-responsive">
+                                <table class="data-table" id="live-single-history-table">
+                                    <thead>
+                                        <tr>
+                                            <th>#</th>
+                                            <th>From Node</th>
+                                            <th>To Node</th>
+                                            <th>Status</th>
+                                            <th>Transit Time</th>
+                                            <th>Timestamp</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="live-single-history-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- Mode A: Live Baggage Manifest Table -->
+                        <div class="panel mt-3" id="live-all-bags-panel">
+                            <div class="panel-header">
+                                <div>
+                                    <h3>All Baggage Manifest (SQLite Live Data)</h3>
+                                    <span class="subtext">Every registered baggage record in SQLite with real-time status and conveyor position</span>
+                                </div>
+                                <div class="manifest-table-controls">
+                                    <input type="text" id="live-table-filter-query" placeholder="Filter by ID, Passenger, Flight..." class="table-search-input">
+                                    <select id="live-table-filter-direction" class="table-filter-select">
+                                        <option value="ALL">All Directions</option>
+                                        <option value="OUTGOING">Outgoing</option>
+                                        <option value="INCOMING">Incoming</option>
+                                        <option value="TRANSFER">Transfer</option>
+                                    </select>
+                                    <select id="live-table-filter-status" class="table-filter-select">
+                                        <option value="ALL">All Statuses</option>
+                                        <option value="REGISTERED">REGISTERED</option>
+                                        <option value="AWAITING_CLEARANCE">AWAITING_CLEARANCE</option>
+                                        <option value="QUEUED">QUEUED</option>
+                                        <option value="IN_TRANSIT">IN_TRANSIT</option>
+                                        <option value="LOADED">LOADED</option>
+                                        <option value="COLLECTED">COLLECTED</option>
+                                        <option value="MISSED_CUTOFF">MISSED_CUTOFF</option>
+                                        <option value="REJECTED">REJECTED</option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <div class="table-responsive">
+                                <table class="data-table" id="live-tracking-manifest-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Bag ID</th>
+                                            <th>Passenger</th>
+                                            <th>Flight / Ref</th>
+                                            <th>Direction</th>
+                                            <th>Current Node</th>
+                                            <th>Destination</th>
+                                            <th>Status</th>
+                                            <th>Clearance</th>
+                                            <th>Est. ETA</th>
+                                            <th>Last Updated</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="live-tracking-manifest-body">
+                                        <!-- Loaded dynamically -->
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </section>

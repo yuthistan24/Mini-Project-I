@@ -267,6 +267,32 @@ abstract class Baggage {
         }
     }
 
+    public List<String> getCompletedRoute() {
+        List<String> list = new ArrayList<>();
+        if (currentRoute == null || currentRoute.isEmpty()) return list;
+        int idx = currentRoute.indexOf(currentLocation);
+        if (idx >= 0) {
+            for (int i = 0; i <= idx; i++) {
+                list.add(currentRoute.get(i));
+            }
+        }
+        return list;
+    }
+
+    public List<String> getRemainingRoute() {
+        List<String> list = new ArrayList<>();
+        if (currentRoute == null || currentRoute.isEmpty()) return list;
+        int idx = currentRoute.indexOf(currentLocation);
+        if (idx >= 0) {
+            for (int i = idx; i < currentRoute.size(); i++) {
+                list.add(currentRoute.get(i));
+            }
+        } else {
+            list.addAll(currentRoute);
+        }
+        return list;
+    }
+
     public boolean isTransferBag() { return direction == BaggageDirection.TRANSFER; }
     public boolean isIncomingBag() { return direction == BaggageDirection.INCOMING; }
     public boolean isOutgoingBag() { return direction == BaggageDirection.OUTGOING; }
