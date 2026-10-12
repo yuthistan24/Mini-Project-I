@@ -224,6 +224,7 @@
                                     <input type="text" id="passenger-track-input" placeholder="e.g. BAG-101, BAG-102">
                                     <button id="passenger-track-btn" class="btn btn-primary">Track</button>
                                 </div>
+                                <div id="passenger-track-feedback" style="display:none; margin-top:0.5rem; font-size:0.85rem; font-weight:600; padding:0.4rem 0.75rem; border-radius:4px;"></div>
                             </div>
                         </div>
 
@@ -252,11 +253,14 @@
                             
                             <div class="track-header-meta" id="passenger-track-meta">
                                 <div><strong>Bag Tag:</strong> <span id="pass-track-bag-id">-</span></div>
-                                <div><strong>Flight:</strong> <span id="pass-track-flight">-</span></div>
-                                <div><strong>Route:</strong> <span id="pass-track-airports">-</span></div>
-                                <div><strong>Current Node:</strong> <span id="pass-track-location">-</span></div>
+                                <div><strong>Passenger:</strong> <span id="pass-track-passenger-name">-</span></div>
+                                <div><strong>Flight &amp; Journey:</strong> <span id="pass-track-flight">-</span> • <span id="pass-track-airports">-</span></div>
+                                <div><strong>Current Location:</strong> <span id="pass-track-location">-</span></div>
                                 <div><strong>Destination:</strong> <span id="pass-track-dest">-</span></div>
-                                <div><strong>Estimated Transit:</strong> <span id="pass-track-eta">-</span></div>
+                                <div><strong>Security Screening:</strong> <span id="pass-track-screening">-</span></div>
+                                <div><strong>Status Description:</strong> <span id="pass-track-friendly-status">-</span></div>
+                                <div><strong>Estimated Transit &amp; ETA:</strong> <span id="pass-track-eta">-</span></div>
+                                <div><strong>Last Updated:</strong> <span id="pass-track-updated">-</span></div>
                             </div>
 
                             <h4 class="mt-3 mb-2">Conveyor Pathway &amp; Checkpoints</h4>

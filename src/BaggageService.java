@@ -96,6 +96,18 @@ public class BaggageService {
     public Map<String, Passenger> getAllPassengers() { return passengers; }
     public Map<String, Baggage> getAllBaggage() { return allBaggage; }
     public ConveyorRoutePlanner getConveyorPlanner() { return conveyorPlanner; }
+    public AuthManager getAuth() { return auth; }
+    public ArrayDeque<Baggage> getConveyorWaitingQueue() { return conveyorWaitingQueue; }
+
+    public void enqueueConveyorWaiting(Baggage bag) {
+        if (bag != null && !conveyorWaitingQueue.contains(bag)) {
+            conveyorWaitingQueue.addLast(bag);
+        }
+    }
+
+    public Baggage pollConveyorWaiting() {
+        return conveyorWaitingQueue.pollFirst();
+    }
 
     public void addLoadedFlight(Flight flight) {
         flights.put(flight.getFlightId(), flight);
@@ -109,6 +121,7 @@ public class BaggageService {
         allBaggage.put(bag.getBagId(), bag);
         if (bag.getStatus() == BaggageStatus.QUEUED) {
             processQueue.add(bag);
+            enqueueConveyorWaiting(bag);
         }
     }
 
@@ -131,11 +144,11 @@ public class BaggageService {
         allBaggage.clear();
         processQueue.clear();
 
-        // 1. Four consistently defined flights
-        Flight f101 = new Flight("AI101", "MAA", "Delhi (DEL)", 660, 630);    // Dep 11:00 AM, Cutoff 10:30 AM
-        Flight f202 = new Flight("6E202", "MAA", "Mumbai (BOM)", 645, 615);   // Dep 10:45 AM, Cutoff 10:15 AM
-        Flight f303 = new Flight("SG303", "MAA", "Bengaluru (BLR)", 675, 645);// Dep 11:15 AM, Cutoff 10:45 AM
-        Flight f404 = new Flight("UK404", "MAA", "Dubai (DXB)", 650, 620);    // Dep 10:50 AM, Cutoff 10:20 AM
+        // 1. Four consistently defined flights covering Tamil Nadu, Indian hubs, and international routes
+        Flight f101 = new Flight("AI101", "MAA", "Delhi (DEL) via Madurai (IXM)", 660, 630);    // Dep 11:00 AM, Cutoff 10:30 AM
+        Flight f202 = new Flight("6E202", "MAA", "Mumbai (BOM) via Coimbatore (CJB)", 645, 615); // Dep 10:45 AM, Cutoff 10:15 AM
+        Flight f303 = new Flight("SG303", "MAA", "Bengaluru (BLR) / Tiruchirappalli (TRZ)", 675, 645);// Dep 11:15 AM, Cutoff 10:45 AM
+        Flight f404 = new Flight("UK404", "MAA", "Dubai (DXB) / Singapore (SIN)", 650, 620);    // Dep 10:50 AM, Cutoff 10:20 AM
 
         flights.put(f101.getFlightId(), f101);
         flights.put(f202.getFlightId(), f202);
@@ -315,6 +328,7 @@ public class BaggageService {
         allBaggage.put(bagId, bag);
         if (status == BaggageStatus.QUEUED) {
             processQueue.add(bag);
+            enqueueConveyorWaiting(bag);
         }
         DatabaseManager.saveBaggage(bag);
         return bag;
@@ -428,6 +442,7 @@ public class BaggageService {
             bag.setClearance(true, reason != null && !reason.isEmpty() ? reason : "Security screening passed");
             processQueue.remove(bag);
             processQueue.add(bag);
+            enqueueConveyorWaiting(bag);
             DatabaseManager.saveBaggage(bag);
             DatabaseManager.logAudit(user.getUsername(), "GRANT_CLEARANCE", bagId, simulatedTime, "SUCCESS", reason);
         } else {
@@ -442,6 +457,7 @@ public class BaggageService {
 
         bag.setClearance(false, reason != null && !reason.isEmpty() ? reason : "Security check rejected");
         processQueue.remove(bag);
+        conveyorWaitingQueue.remove(bag);
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.logAudit(user.getUsername(), "REJECT_CLEARANCE", bagId, simulatedTime, "SUCCESS", reason);
     }
@@ -459,6 +475,7 @@ public class BaggageService {
         }
 
         Baggage bag = processQueue.poll();
+        conveyorWaitingQueue.remove(bag);
         processBaggageInternal(bag, user);
         return bag;
     }
@@ -469,6 +486,7 @@ public class BaggageService {
         if (bag == null) throw new IllegalArgumentException("Unknown Baggage ID: " + bagId);
 
         processQueue.remove(bag);
+        conveyorWaitingQueue.remove(bag);
         processBaggageInternal(bag, user);
         return bag;
     }

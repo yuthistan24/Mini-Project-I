@@ -669,31 +669,133 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Human-readable status mapping for passengers
+    function getFriendlyPassengerStatus(status) {
+        switch (status) {
+            case 'REGISTERED': return 'Baggage Checked-In: Awaiting initial conveyor screening';
+            case 'AWAITING_CLEARANCE': return 'Security Inspection: Under mandatory security screening';
+            case 'CLEARED': return 'Security Cleared: Verified for conveyor intake';
+            case 'QUEUED': return 'In Conveyor Queue: Waiting at sorting entry point';
+            case 'IN_TRANSIT': return 'Moving on Conveyor: Routing through airport conveyor network';
+            case 'AT_LOADING_BAY': return 'At Bay Area: Reached aircraft departure loading point';
+            case 'LOADED': return 'Loaded: Securely stowed onto departing flight';
+            case 'MISSED_CUTOFF': return 'Cutoff Missed: Delivery delayed past flight cutoff. Ground staff notified';
+            case 'ARRIVAL_PENDING': return 'Inbound Arrival: Flight touched down, awaiting offload';
+            case 'UNLOADED': return 'Aircraft Unloaded: Transferring onto terminal conveyor';
+            case 'AT_COLLECTION_POINT': return 'Ready for Claim: Arrived at baggage carousel';
+            case 'COLLECTED': return 'Claimed: Baggage successfully collected by passenger';
+            case 'EXCEPTION': return 'Routing Exception: Network conveyor jammed or segment rerouted';
+            case 'REJECTED': return 'Security Alert: Prohibited item detected; baggage held';
+            default: return status || 'Processing';
+        }
+    }
+
     // Render Passenger Live Tracking Embedded Pathway
     async function renderPassengerLiveRoute(bagId) {
-        state.activeTrackedBagId = bagId;
+        const feedbackEl = document.getElementById('passenger-track-feedback');
         const panel = document.getElementById('passenger-live-tracking-panel');
         if (!panel) return;
-        panel.style.display = 'block';
+
+        if (!bagId || !bagId.trim()) {
+            if (feedbackEl) {
+                feedbackEl.style.display = 'block';
+                feedbackEl.style.backgroundColor = '#fee2e2';
+                feedbackEl.style.color = '#991b1b';
+                feedbackEl.innerText = 'Please enter a valid Baggage Tag ID (e.g. BAG-101).';
+            }
+            return;
+        }
+
+        const normalizedTag = bagId.trim().toUpperCase();
+        state.activeTrackedBagId = normalizedTag;
 
         try {
-            const res = await fetch(`/api/baggage/track?id=${encodeURIComponent(bagId)}`);
+            const res = await fetch(`/api/baggage/track?id=${encodeURIComponent(normalizedTag)}`);
             if (res.ok) {
                 const b = await res.json();
+                if (feedbackEl) {
+                    feedbackEl.style.display = 'block';
+                    feedbackEl.style.backgroundColor = '#dcfce7';
+                    feedbackEl.style.color = '#166534';
+                    feedbackEl.innerText = `Found baggage record for ${b.bagId}. Live details updated below.`;
+                }
+
+                panel.style.display = 'block';
                 document.getElementById('passenger-active-bag-label').innerText = `Tag: ${b.bagId} (${b.passengerName})`;
                 document.getElementById('passenger-live-status-badge').innerHTML = getStatusBadge(b.status);
                 document.getElementById('pass-track-bag-id').innerText = b.bagId;
-                document.getElementById('pass-track-flight').innerText = b.flightId || 'Arrival';
+                const passNameEl = document.getElementById('pass-track-passenger-name');
+                if (passNameEl) passNameEl.innerText = `${b.passengerName} (${b.passengerId})`;
+
+                document.getElementById('pass-track-flight').innerText = b.flightId || 'Inbound';
                 document.getElementById('pass-track-airports').innerText = `${b.originAirport} → ${b.destinationAirport}`;
                 document.getElementById('pass-track-location').innerText = b.currentLocation;
                 document.getElementById('pass-track-dest').innerText = b.destinationNode || '-';
-                document.getElementById('pass-track-eta').innerText = (b.estimatedTime >= 0) ? `${b.estimatedTime} Mins` : 'N/A';
+
+                const screenEl = document.getElementById('pass-track-screening');
+                if (screenEl) {
+                    screenEl.innerText = b.cleared ? `Cleared (${b.clearanceReason || 'Verified'})` : 'Pending Inspection';
+                }
+
+                const friendlyEl = document.getElementById('pass-track-friendly-status');
+                if (friendlyEl) {
+                    friendlyEl.innerText = getFriendlyPassengerStatus(b.status);
+                }
+
+                const etaEl = document.getElementById('pass-track-eta');
+                if (etaEl) {
+                    if (b.status === 'LOADED' || b.status === 'COLLECTED') {
+                        etaEl.innerText = `Completed (At ${b.destinationNode || b.currentLocation})`;
+                    } else if (b.status === 'MISSED_CUTOFF') {
+                        etaEl.innerText = 'Cutoff Missed - Cutoff was ' + (b.cutoff || 'earlier');
+                    } else if (b.estimatedTime >= 0) {
+                        const arrTime = b.formattedSimulatedTime ? ` ~ ETA ${b.formattedSimulatedTime}` : '';
+                        etaEl.innerText = `${b.estimatedTime} Mins${arrTime}`;
+                    } else {
+                        etaEl.innerText = 'Route recalculating / unavailable';
+                    }
+                }
+
+                const updatedEl = document.getElementById('pass-track-updated');
+                if (updatedEl) {
+                    updatedEl.innerText = b.updatedAt || new Date().toLocaleTimeString();
+                }
 
                 renderVisualPathway('passenger-visual-route', b);
                 renderConveyorNetworkSvg('passenger-conveyor-svg', state.baggageList, state.conveyorList, b);
+
+                // Scroll smoothly into view
+                panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            } else if (res.status === 404) {
+                if (feedbackEl) {
+                    feedbackEl.style.display = 'block';
+                    feedbackEl.style.backgroundColor = '#fee2e2';
+                    feedbackEl.style.color = '#991b1b';
+                    feedbackEl.innerText = `No baggage found with this tag ID: ${normalizedTag}`;
+                }
+            } else if (res.status === 403) {
+                if (feedbackEl) {
+                    feedbackEl.style.display = 'block';
+                    feedbackEl.style.backgroundColor = '#fef3c7';
+                    feedbackEl.style.color = '#92400e';
+                    feedbackEl.innerText = `Access restricted: Baggage ${normalizedTag} is registered to another passenger account.`;
+                }
+            } else {
+                if (feedbackEl) {
+                    feedbackEl.style.display = 'block';
+                    feedbackEl.style.backgroundColor = '#fee2e2';
+                    feedbackEl.style.color = '#991b1b';
+                    feedbackEl.innerText = `Server error while querying baggage ${normalizedTag}.`;
+                }
             }
         } catch (e) {
             console.error('Error fetching passenger route', e);
+            if (feedbackEl) {
+                feedbackEl.style.display = 'block';
+                feedbackEl.style.backgroundColor = '#fee2e2';
+                feedbackEl.style.color = '#991b1b';
+                feedbackEl.innerText = 'Network error: Unable to contact tracking service.';
+            }
         }
     }
 
@@ -1328,12 +1430,26 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        // Passenger Quick Track Button (Passenger View)
+        // Passenger Quick Track Button & Enter key handler (Passenger View)
         const trackBtn = document.getElementById('passenger-track-btn');
+        const trackInput = document.getElementById('passenger-track-input');
+        
+        function triggerPassengerTrack() {
+            if (trackInput) {
+                const inputVal = trackInput.value.trim();
+                renderPassengerLiveRoute(inputVal);
+            }
+        }
+
         if (trackBtn) {
-            trackBtn.addEventListener('click', () => {
-                const input = document.getElementById('passenger-track-input').value.trim();
-                if (input) renderPassengerLiveRoute(input);
+            trackBtn.addEventListener('click', triggerPassengerTrack);
+        }
+        if (trackInput) {
+            trackInput.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    triggerPassengerTrack();
+                }
             });
         }
 

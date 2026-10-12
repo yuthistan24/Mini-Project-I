@@ -687,6 +687,12 @@ public class DatabaseManager {
                         inconsistent.add(new String[]{bagId, "status", "AWAITING_CLEARANCE", "Uncleared baggage halted in AWAITING_CLEARANCE"});
                     }
                 }
+                // Check 4: OUTGOING or TRANSFER bag with exceeded loading cutoff
+                if (("OUTGOING".equalsIgnoreCase(dir) || "TRANSFER".equalsIgnoreCase(dir)) && cutoff > 0 && service != null) {
+                    if (service.getSimulatedTime() > cutoff && ("IN_TRANSIT".equalsIgnoreCase(status) || "QUEUED".equalsIgnoreCase(status))) {
+                        inconsistent.add(new String[]{bagId, "status", "MISSED_CUTOFF", "Baggage exceeded loading cutoff (" + cutoff + "m)"});
+                    }
+                }
             }
 
             for (String[] fix : inconsistent) {
