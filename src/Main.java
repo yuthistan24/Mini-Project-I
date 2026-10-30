@@ -56,6 +56,7 @@ public class Main {
             server.createContext("/api/time", new TimeHandler());
             server.createContext("/api/time/advance", new TimeAdvanceHandler());
             server.createContext("/api/system/reset", new SystemResetHandler());
+            server.createContext("/api/cache", new CacheStatsHandler());
 
             server.setExecutor(null);
             server.start();
@@ -142,6 +143,22 @@ public class Main {
     public static String escapeJson(String s) {
         if (s == null) return "";
         return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "");
+    }
+
+    /** Appends the derived fuzzy urgency fields to a JSON object. */
+    private static void appendUrgencyJson(StringBuilder sb, Baggage bag) {
+        FuzzyUrgency.Result u = bag.getUrgency();
+        if (u == null) {
+            u = FuzzyUrgency.Result.ineligible(0, 0, 0, 0);
+        }
+        sb.append("\"urgencyScore\":").append(u.score).append(",")
+          .append("\"urgencyLabel\":\"").append(escapeJson(u.label)).append("\",")
+          .append("\"urgencyEligible\":").append(u.eligible).append(",")
+          .append("\"urgencyRule\":\"").append(escapeJson(u.rule)).append("\",")
+          .append("\"urgencyTimeRemaining\":").append(u.timeRemaining).append(",")
+          .append("\"urgencyTravelTime\":").append(u.travelTime).append(",")
+          .append("\"urgencyTransfer\":").append(u.transferUrgency).append(",")
+          .append("\"urgencyDelay\":").append(u.waitDelay).append(",");
     }
 
     // ==================== HTTP HANDLERS ====================
@@ -386,8 +403,9 @@ public class Main {
                   .append("\"clearanceReason\":\"").append(escapeJson(b.getClearanceReason())).append("\",")
                   .append("\"status\":\"").append(b.getStatus()).append("\",")
                   .append("\"estimatedTime\":").append(b.getEstimatedTime()).append(",")
-                  .append("\"updatedAt\":\"").append(escapeJson(b.getUpdatedAt())).append("\",")
-                  .append("\"route\":[");
+                  .append("\"updatedAt\":\"").append(escapeJson(b.getUpdatedAt())).append("\",");
+                appendUrgencyJson(sb, b);
+                sb.append("\"route\":[");
                 List<String> r = b.getCurrentRoute();
                 if (r != null) {
                     for (int j = 0; j < r.size(); j++) {
@@ -559,8 +577,9 @@ public class Main {
                   .append("\"passengerName\":\"").append(escapeJson(processed.getPassengerName())).append("\",")
                   .append("\"bagStatus\":\"").append(processed.getStatus()).append("\",")
                   .append("\"currentLocation\":\"").append(escapeJson(processed.getCurrentLocation())).append("\",")
-                  .append("\"estimatedTime\":").append(processed.getEstimatedTime()).append(",")
-                  .append("\"route\":[");
+                  .append("\"estimatedTime\":").append(processed.getEstimatedTime()).append(",");
+                appendUrgencyJson(sb, processed);
+                sb.append("\"route\":[");
                 List<String> r = processed.getCurrentRoute();
                 for (int i = 0; i < r.size(); i++) {
                     if (i > 0) sb.append(",");
@@ -673,8 +692,9 @@ public class Main {
                   .append("\"clearanceReason\":\"").append(escapeJson(b.getClearanceReason())).append("\",")
                   .append("\"status\":\"").append(b.getStatus()).append("\",")
                   .append("\"estimatedTime\":").append(b.getEstimatedTime()).append(",")
-                  .append("\"updatedAt\":\"").append(escapeJson(b.getUpdatedAt())).append("\",")
-                  .append("\"route\":[");
+                  .append("\"updatedAt\":\"").append(escapeJson(b.getUpdatedAt())).append("\",");
+                appendUrgencyJson(sb, b);
+                sb.append("\"route\":[");
                 List<String> r = b.getCurrentRoute();
                 if (r != null) {
                     for (int j = 0; j < r.size(); j++) {
@@ -731,6 +751,16 @@ public class Main {
                 return;
             }
 
+            // Cache-aside: Redis first, then build from the authoritative data.
+            // The tracking key is invalidated on every baggage update.
+            RedisCache.Lookup cached = RedisCache.fetch(
+                    RedisCache.baggageTrackKey(bag.getBagId()), () -> null);
+            if (cached.hit) {
+                exchange.getResponseHeaders().set("X-Cache", "HIT");
+                sendResponse(exchange, 200, cached.value);
+                return;
+            }
+
             String dest = bag.getDestinationNode();
             List<String> route = bag.getCurrentRoute();
             int estTime = bag.getEstimatedTime();
@@ -759,8 +789,9 @@ public class Main {
               .append("\"loadingCutoff\":").append(bag.getLoadingCutoff()).append(",")
               .append("\"estimatedTime\":").append(estTime).append(",")
               .append("\"cleared\":").append(bag.isOperatorCleared()).append(",")
-              .append("\"clearanceReason\":\"").append(escapeJson(bag.getClearanceReason())).append("\",")
-              .append("\"updatedAt\":\"").append(escapeJson(bag.getUpdatedAt())).append("\",")
+              .append("\"clearanceReason\":\"").append(escapeJson(bag.getClearanceReason())).append("\",");
+            appendUrgencyJson(sb, bag);
+            sb.append("\"updatedAt\":\"").append(escapeJson(bag.getUpdatedAt())).append("\",")
               .append("\"simulatedTime\":").append(baggageService.getSimulatedTime()).append(",")
               .append("\"formattedSimulatedTime\":\"").append(baggageService.getFormattedSimulatedTime()).append("\",")
               .append("\"hasValidRoute\":").append(route != null && !route.isEmpty()).append(",")
@@ -803,7 +834,10 @@ public class Main {
             }
             sb.append("]}");
 
-            sendResponse(exchange, 200, sb.toString());
+            String payload = sb.toString();
+            RedisCache.put(RedisCache.baggageTrackKey(bag.getBagId()), payload);
+            exchange.getResponseHeaders().set("X-Cache", "MISS");
+            sendResponse(exchange, 200, payload);
         }
     }
 
@@ -881,6 +915,13 @@ public class Main {
                 return;
             }
 
+            RedisCache.Lookup cached = RedisCache.fetch(RedisCache.FLIGHTS_KEY, () -> null);
+            if (cached.hit) {
+                exchange.getResponseHeaders().set("X-Cache", "HIT");
+                sendResponse(exchange, 200, cached.value);
+                return;
+            }
+
             Map<String, Flight> flights = baggageService.getAllFlights();
             StringBuilder sb = new StringBuilder("[");
             int i = 0;
@@ -898,7 +939,10 @@ public class Main {
                   .append("}");
             }
             sb.append("]");
-            sendResponse(exchange, 200, sb.toString());
+            String payload = sb.toString();
+            RedisCache.put(RedisCache.FLIGHTS_KEY, payload);
+            exchange.getResponseHeaders().set("X-Cache", "MISS");
+            sendResponse(exchange, 200, payload);
         }
     }
 
@@ -949,6 +993,13 @@ public class Main {
                 return;
             }
 
+            RedisCache.Lookup cached = RedisCache.fetch(RedisCache.BAYS_KEY, () -> null);
+            if (cached.hit) {
+                exchange.getResponseHeaders().set("X-Cache", "HIT");
+                sendResponse(exchange, 200, cached.value);
+                return;
+            }
+
             Map<String, LoadingBay> bays = baggageService.getAllBays();
             StringBuilder sb = new StringBuilder("[");
             int i = 0;
@@ -960,7 +1011,10 @@ public class Main {
                   .append("}");
             }
             sb.append("]");
-            sendResponse(exchange, 200, sb.toString());
+            String payload = sb.toString();
+            RedisCache.put(RedisCache.BAYS_KEY, payload);
+            exchange.getResponseHeaders().set("X-Cache", "MISS");
+            sendResponse(exchange, 200, payload);
         }
     }
 
@@ -970,6 +1024,13 @@ public class Main {
             User user = getSessionUser(exchange);
             if (user == null || !user.isActive()) {
                 sendResponse(exchange, 401, "{\"error\": \"Unauthorized\"}");
+                return;
+            }
+
+            RedisCache.Lookup cached = RedisCache.fetch(RedisCache.CONVEYORS_KEY, () -> null);
+            if (cached.hit) {
+                exchange.getResponseHeaders().set("X-Cache", "HIT");
+                sendResponse(exchange, 200, cached.value);
                 return;
             }
 
@@ -986,7 +1047,10 @@ public class Main {
                   .append("}");
             }
             sb.append("]");
-            sendResponse(exchange, 200, sb.toString());
+            String payload = sb.toString();
+            RedisCache.put(RedisCache.CONVEYORS_KEY, payload);
+            exchange.getResponseHeaders().set("X-Cache", "MISS");
+            sendResponse(exchange, 200, payload);
         }
     }
 
@@ -1153,6 +1217,38 @@ public class Main {
                       .append("}");
                 }
                 sb.append("]");
+                sendResponse(exchange, 200, sb.toString());
+            } catch (SecurityException e) {
+                sendResponse(exchange, 403, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");
+            }
+        }
+    }
+
+    static class CacheStatsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            User user = getSessionUser(exchange);
+            if (user == null || !user.isActive()) {
+                sendResponse(exchange, 401, "{\"error\": \"Unauthorized\"}");
+                return;
+            }
+
+            try {
+                AuthManager.requireUserPermission(user, Role.ADMIN);
+                Map<String, Object> stats = RedisCache.getStats();
+                StringBuilder sb = new StringBuilder("{");
+                int i = 0;
+                for (Map.Entry<String, Object> entry : stats.entrySet()) {
+                    if (i++ > 0) sb.append(",");
+                    sb.append("\"").append(escapeJson(entry.getKey())).append("\":");
+                    Object value = entry.getValue();
+                    if (value instanceof Number || value instanceof Boolean) {
+                        sb.append(value);
+                    } else {
+                        sb.append("\"").append(escapeJson(String.valueOf(value))).append("\"");
+                    }
+                }
+                sb.append("}");
                 sendResponse(exchange, 200, sb.toString());
             } catch (SecurityException e) {
                 sendResponse(exchange, 403, "{\"error\": \"" + escapeJson(e.getMessage()) + "\"}");

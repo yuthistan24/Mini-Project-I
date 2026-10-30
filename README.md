@@ -1,7 +1,7 @@
 # Vaanam Airport Intelligent Baggage Handling and Routing System
 **Second Project Review (Review 2) — College Mini-Project 10**
 
-A compact, deterministic, and academically grounded airport baggage simulation for a fictional regional hub called **Vaanam Airport**. Implemented with a pure Java backend, persistent SQLite database via JDBC, and a student-built web interface using HTML, CSS, and Vanilla JavaScript.
+A compact, deterministic, and academically grounded airport baggage simulation for a fictional regional hub called **Vaanam Airport**. Implemented with a pure Java backend, persistent SQLite database via JDBC, and a student-built web interface using HTML, CSS, and Vanilla JavaScript. Baggage urgency is ranked with a small hand-written fuzzy inference system, and frequently read records can optionally be served through a Redis cache-aside layer without SQLite ever losing its role as the source of truth.
 
 ---
 
@@ -27,7 +27,7 @@ Manual baggage processing in regional airports causes serious operational bottle
 
 ## 2. System Architecture & Compact File Structure
 
-The project conforms strictly to the **4–5 main Java files** backend structure and **3 frontend files**:
+The backend keeps the original **five core Java classes** and adds two small, focused helpers for the new features, while the frontend remains **3 files**:
 
 ```
 Mini-Project-I/
@@ -37,7 +37,9 @@ Mini-Project-I/
 │   ├── DatabaseManager.java  # SQLite persistence via JDBC, schema initialization, audit logging
 │   ├── BaggageService.java   # PriorityQueue comparator, Dijkstra graph routing, clock, cutoff checks
 │   ├── Auth.java             # PBKDF2 password hashing, session tokens, role permissions, passenger privacy
-│   └── TestRunner.java       # Standalone automated verification suite (16 test suites, 51 assertions)
+│   ├── FuzzyUrgency.java     # Hand-written fuzzy urgency scoring (no external library)
+│   ├── RedisCache.java       # Optional Redis cache-aside layer with SQLite fallback
+│   └── TestRunner.java       # Standalone automated verification suite (19 test suites, 76 assertions)
 ├── web/
 │   ├── index.html            # Clean student-built UI, tables, modals, route tracking
 │   ├── style.css             # Light grey background, restrained navy accents, functional tables
@@ -47,7 +49,8 @@ Mini-Project-I/
 │   ├── slf4j-api.jar         # Logging API
 │   └── slf4j-simple.jar      # Simple logger implementation
 ├── data/
-│   └── airport.db            # Persistent SQLite database
+│   ├── airport.db            # Persistent SQLite database
+│   └── test_airport.db       # Isolated database recreated by TestRunner
 └── README.md                 # Project documentation and review report
 ```
 
@@ -60,7 +63,9 @@ Mini-Project-I/
 | [`src/DatabaseManager.java`](file:///c:/Users/yuthg/Mini-Project-I/src/DatabaseManager.java) | SQLite JDBC integration with prepared statements. Manages schemas (`Users`, `Passenger`, `Flight`, `LoadingBay`, `ConveyorSegment`, `Baggage`, `RoutingRecord`, `AuditLog`), transactions, and configurable database URL for test isolation. |
 | [`src/BaggageService.java`](file:///c:/Users/yuthg/Mini-Project-I/src/BaggageService.java) | Core algorithms: deterministic `PriorityQueue` with tie-breaking comparator, `ConveyorRoutePlanner` implementing Dijkstra's algorithm, conveyor toggle & failure rerouting, simulated clock, and 32-record synthetic dataset. |
 | [`src/Auth.java`](file:///c:/Users/yuthg/Mini-Project-I/src/Auth.java) | Cryptographic PBKDF2WithHmacSHA256 password hashing (10,000 iterations, 16-byte random salt), session tokens, certified clearance authority checks, and server-side passenger privacy enforcement. |
-| [`src/TestRunner.java`](file:///c:/Users/yuthg/Mini-Project-I/src/TestRunner.java) | Standalone verification runner testing all 16 evaluation suites using isolated test database `data/test_airport.db`. |
+| [`src/FuzzyUrgency.java`](file:///c:/Users/yuthg/Mini-Project-I/src/FuzzyUrgency.java) | Maps four crisp inputs to LOW/MEDIUM/HIGH fuzzy memberships, applies a compact rule base, and returns a deterministic 0–100 urgency score with the winning rule description. |
+| [`src/RedisCache.java`](file:///c:/Users/yuthg/Mini-Project-I/src/RedisCache.java) | Minimal RESP client over `Socket` implementing cache-aside `GET`/`SETEX`/`DEL`, short TTLs, hit/miss statistics, targeted invalidation, and silent fallback when Redis is unavailable. |
+| [`src/TestRunner.java`](file:///c:/Users/yuthg/Mini-Project-I/src/TestRunner.java) | Standalone verification runner testing all 19 evaluation suites using isolated test database `data/test_airport.db`; suite 19 starts an in-process mock Redis server. |
 
 ---
 
@@ -81,14 +86,44 @@ The routing planner finds the minimum transit-time path from the bag's current c
 5. **Dynamic Rerouting**: When a conveyor segment fails, the system automatically recalculates the route from the bag's *last confirmed node*. If no path exists, the bag is flagged with status `EXCEPTION` and transit time `-1`.
 
 ### 3.3 PriorityQueue for Deadline-Based Processing
-Eligible baggage awaiting dispatch is processed using a custom `Comparator<Baggage>` enforcing the exact tie-breaking hierarchy:
-1. **Earliest Flight Loading Cutoff**: The bag with the smallest departure deadline cutoff is prioritized first.
+Eligible baggage awaiting dispatch is processed using a custom `Comparator<Baggage>` enforcing the exact hierarchy:
+1. **Earliest Flight Loading Cutoff**: The bag with the smallest departure deadline cutoff is prioritized first. This is always the primary key and is never overridden by fuzzy urgency.
 2. **Transfer Urgency**: Transfer baggage takes precedence over origin baggage when cutoffs are equal.
 3. **Passenger Category Rank**: Rank 1 (`FIRST_CLASS`) > Rank 2 (`BUSINESS`) > Rank 3 (`ECONOMY`).
-4. **Arrival Order**: Earlier baggage check-in sequence number is processed first.
-5. **Baggage ID**: Lexicographical tie-breaker (`b1.getBagId().compareTo(b2.getBagId())`) ensuring completely deterministic ordering.
+4. **Fuzzy Urgency Score**: Higher urgency score first, consulted **only** after cutoff, transfer type, and passenger category have tied.
+5. **Arrival Order**: Earlier baggage check-in sequence number is processed first.
+6. **Baggage ID**: Lexicographical tie-breaker (`b1.getBagId().compareTo(b2.getBagId())`) ensuring completely deterministic ordering.
 
-### 3.4 HashMap & ArrayDeque
+The fuzzy score therefore refines ordering inside an existing priority band; it can never move a later-cutoff bag ahead of a bag with an earlier loading cutoff.
+
+### 3.4 Fuzzy Logic Urgency Scoring
+[`FuzzyUrgency.java`](file:///c:/Users/yuthg/Mini-Project-I/src/FuzzyUrgency.java) implements a small, hand-written fuzzy inference system (no external fuzzy library):
+
+| Input | Crisp value | LOW membership | MEDIUM membership | HIGH membership |
+|---|---|---|---|---|
+| Remaining time to loading cutoff | `cutoff − simulatedTime` minutes | falls from 1 at 30m to 0 at 60m | triangle 30m–60m–90m | rises from 0 at 60m to 1 at 90m |
+| Travel time to bay | Dijkstra ETA minutes | falls from 1 at 10m to 0 at 20m | triangle 10m–20m–30m | rises from 0 at 20m to 1 at 30m |
+| Transfer urgency | 90 for transfer bags, 35 for origin bags | falls from 1 at 25 to 0 at 50 | — | rises from 0 at 50 to 1 at 75 |
+| Processing / waiting delay | `simulatedTime − queuedSince` minutes | falls from 1 at 10m to 0 at 25m | triangle 10m–25m–40m | rises from 0 at 25m to 1 at 40m |
+
+A compact rule base covers critical combinations (e.g. *remaining time LOW and travel time HIGH → CRITICAL*, score 95), high combinations (e.g. *remaining time LOW → HIGH*, score 70), medium combinations (e.g. *transfer urgency HIGH → MEDIUM*, score 55), and low combinations (e.g. *remaining time HIGH and travel time LOW → LOW*, score 15). The strongest rule is selected, then blended toward the neutral score 50 according to its firing strength so partial memberships produce smooth intermediate scores. Labels are `CRITICAL` (85–100), `HIGH` (65–84), `MEDIUM` (35–64), and `LOW` (0–34).
+
+- **Eligibility**: Incoming baggage, baggage without a loading cutoff, and terminal statuses (`LOADED`, `COLLECTED`, `MISSED_CUTOFF`, `REJECTED`) receive an ineligible result and display `—`.
+- **Determinism**: Scores are calculated only from stored state and the simulated clock. No randomness is used.
+- **Refresh triggers**: Urgencies are recalculated and the `PriorityQueue` rebuilt after simulated-time changes, baggage registration, flight assignment, clearance decisions, processing steps, collection, and flight/bay/cutoff or conveyor changes. `queuedSince` is persisted in SQLite so the waiting-delay input survives restarts.
+- **Transparency**: The winning rule and all four input values are returned in the API and shown in the baggage table, tracking modal, and live inspector. Ineligible bags display `—`.
+
+### 3.5 Optional Redis Cache-Aside Layer
+[`RedisCache.java`](file:///c:/Users/yuthg/Mini-Project-I/src/RedisCache.java) is a deliberately small cache layer, not a replacement database:
+
+- **Cached data**: individual baggage tracking payloads (`baggage:track:<bagId>`), flight details together with their loading-bay assignments (`flights:all`, `bays:all`), and conveyor network data (`conveyors:all`). Every Redis key is prefixed with `vaanam:`.
+- **Write path**: SQLite is committed first. Only after a successful write does the service invalidate the affected cache entry (or entries), so cached data is always derived from already-committed SQLite state.
+- **Invalidation**: Baggage saves invalidate that bag's tracking key; flight/bay changes invalidate flights and bays; conveyor changes invalidate conveyors and all baggage tracks; simulated-clock changes and full resets invalidate all baggage tracks. Repair/sync operations invalidate all derived data.
+- **TTL**: `SETEX` with a 45-second default (set `REDIS_TTL` to 30–60) means even a missed invalidation expires quickly.
+- **Failure behaviour**: Connect and read timeouts are 500 ms. On connection failure the cache marks itself unavailable, retries after a 2-second backoff, and silently falls back to SQLite/in-memory data. The application starts and runs normally with Redis stopped.
+- **Observability**: Cached responses include an `X-Cache: HIT` or `X-Cache: MISS` header, and `GET /api/cache` returns hit/miss/error/invalidation counters plus TTL and endpoint information.
+
+### 3.6 HashMap & ArrayDeque
 - **`HashMap`**: Provides $O(1)$ lookup for baggage by ID, flight by flight number, passenger by passenger ID, and loading bay by bay ID.
 - **`ArrayDeque`**: Represents the FIFO queue for physical conveyor entry points before routing.
 
@@ -202,6 +237,7 @@ erDiagram
         string clearanceReason
         string status
         int estimatedTime
+        int queuedSince
         string originAirport
         string destinationAirport
     }
@@ -240,11 +276,13 @@ erDiagram
     FLIGHT ||--o| LOADING_BAY : occupies
 ```
 
+`queuedSince` stores the simulated minute when a bag entered processing/waiting. It is added automatically to existing databases with `ALTER TABLE ... ADD COLUMN` during schema initialization, so the original `airport.db` can be upgraded in place without losing records.
+
 ---
 
 ## 8. Verification & Test Suite Results
 
-The automated test runner (`TestRunner.java`) tests all core requirements across 16 test suites using an isolated test database (`data/test_airport.db`).
+The automated test runner (`TestRunner.java`) tests all core requirements across 19 test suites using an isolated test database (`data/test_airport.db`). Suite 19 starts a lightweight in-process mock RESP server so cache hits, invalidation, and fallback can be verified even when no Redis installation is available.
 
 ### Verification Test Summary
 ```
@@ -335,8 +373,39 @@ The automated test runner (`TestRunner.java`) tests all core requirements across
   [PASS] Sample dataset contains at least 30 synthetic baggage records (36 records)
   [PASS] Every sample baggage record contains valid passenger, location, and status attributes
 
+[Test Suite 17] Fuzzy Logic Urgency Scoring
+  [PASS] Outgoing baggage with a cutoff is urgency-eligible
+  [PASS] Low remaining time + high travel time -> CRITICAL urgency (95)
+  [PASS] High remaining time + low travel time -> LOW urgency (32)
+  [PASS] Urgency does not decrease when the remaining cutoff time increases
+  [PASS] Urgency does not decrease when travel time increases
+  [PASS] High transfer urgency raises the score above an equivalent outgoing bag (80 > 55)
+  [PASS] A longer processing/waiting delay raises urgency (55 > 48)
+  [PASS] Incoming baggage is not eligible for departure-cutoff urgency
+
+[Test Suite 18] Earliest Loading Cutoff Remains Primary Priority
+  [PASS] Test setup produces a lower fuzzy score for the earliest-cutoff bag
+  [PASS] Earliest loading cutoff remains first even when fuzzy urgency is lower
+  [PASS] Within later cutoffs, the higher fuzzy urgency bag is dispatched next
+
+[Test Suite 19] Redis Cache-Aside, Invalidation and Fallback
+  [PASS] Redis TTL is a short 30-60 second fallback (45s)
+  [PASS] First baggage tracking request is a cache miss
+  [PASS] Second baggage tracking request is a cache hit
+  [PASS] Cache hit avoided a second database/data load
+  [PASS] Redis hit counter records the served cached record
+  [PASS] Old baggage position was cached before the update
+  [PASS] Baggage position updated through the simulated conveyor step
+  [PASS] Cache invalidation prevents an old baggage position from being displayed
+  [PASS] Flight details are served from Redis on a hit
+  [PASS] Flight changes invalidate cached flight details
+  [PASS] Conveyor network information is served from Redis on a hit
+  [PASS] Conveyor availability changes invalidate cached network information
+  [PASS] Passenger tracking reflects the updated position after a SQLite reload
+  [PASS] Application continues with the SQLite fallback when Redis is unavailable
+
 =======================================================
-FINAL VERIFICATION RESULTS: 51 Passed, 0 Failed.
+FINAL VERIFICATION RESULTS: 76 Passed, 0 Failed.
 =======================================================
 ```
 
@@ -363,7 +432,25 @@ java -cp "bin;lib/*" TestRunner
 java -cp "bin;lib/*" Main
 ```
 
-### 4. Open in Web Browser
+### 4. Optional: Run Redis for Cache Hits
+Redis is **optional**. If `redis-server` is not installed or the daemon is stopped, the application logs a single fallback message and serves everything from SQLite/in-memory state. To enable the cache-aside layer, start Redis locally on the default port before launching the application:
+
+```powershell
+redis-server --port 6379
+```
+
+Configuration is read from environment variables (all optional):
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `REDIS_HOST` | `127.0.0.1` | Redis host |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_PASSWORD` | *(empty)* | Password sent with `AUTH` when non-empty |
+| `REDIS_TTL` | `45` | Cache TTL in seconds (use 30–60) |
+
+Verify cache behaviour by repeating a track/flights/bays/conveyors request and checking the `X-Cache` response header, or inspect `GET /api/cache` as an administrator. No Docker configuration is required for this project; a local Redis installation is sufficient.
+
+### 5. Open in Web Browser
 Navigate to:
 ```
 http://localhost:8080
@@ -383,6 +470,7 @@ http://localhost:8080
 - **Inheritance**: Base class `Baggage` is extended by `OriginBag`, `TransferBag`, and `IncomingBag` to model distinct workflow behaviors without duplicating code.
 - **Polymorphism**: The priority processing queue treats all subclasses as `Baggage`, invoking polymorphic getters (`isTransferBag()`, `isIncomingBag()`) during priority comparison and routing.
 - **Abstraction**: `ConveyorRoutePlanner` abstracts graph representation and Dijkstra shortest-path calculations behind simple method calls (`getShortestPath`, `markConveyorUnavailable`).
+- **Single Responsibility**: `FuzzyUrgency` owns only fuzzy membership and rule evaluation; `RedisCache` owns only cache transport, TTL, statistics, and invalidation. `BaggageService` orchestrates when urgency is refreshed and when cache entries are invalidated.
 
 ---
 
@@ -396,8 +484,10 @@ http://localhost:8080
 
 ## 12. Viva Presentation & Demonstration Checklist
 
-1. **Architecture Explanation**: Walk through the 5 core Java files in `src/` and explain how models, routing, database, and auth are cleanly partitioned.
+1. **Architecture Explanation**: Walk through the five core Java classes plus the two focused helpers (`FuzzyUrgency`, `RedisCache`) and explain how models, routing, database, auth, scoring, and caching are cleanly partitioned.
 2. **Dijkstra Routing Demonstration**: Show route `CHECK-IN` → `BAY-A` (19 mins). In the Conveyor Network tab, disable `SORTING` → `CENTRAL`. Show how the system dynamically recalculates the route via `TRANSFER-A` (21 mins).
-3. **PriorityQueue Tie-Breaking**: Demonstrate why `BAG-103` (Cutoff 10:15 AM) is dispatched ahead of `BAG-102` (Cutoff 10:30 AM), proving deadline-first prioritization.
-4. **Role Security & Passenger Privacy**: Log in as `ramesh` and show that only his 4 bags are visible. Show that accessing other passenger records is blocked by Java backend authorization.
-5. **Persistence**: Advance the simulated clock, restart the Java application, and show that all baggage statuses and audit logs remain intact in SQLite.
+3. **PriorityQueue Tie-Breaking**: Demonstrate why `BAG-103` (Cutoff 10:15 AM) is dispatched ahead of `BAG-102` (Cutoff 10:30 AM), proving deadline-first prioritization even when the later bag has a higher fuzzy urgency.
+4. **Fuzzy Urgency Demonstration**: Open the tracking modal for `BAG-102` and explain the four inputs, the winning rule, and why the score is `48 MEDIUM`. Advance the simulated clock or process the queue and show the score changing deterministically. Show that incoming baggage displays `—` because it is not eligible.
+5. **Redis Cache Demonstration**: With Redis running, request the same track/flights/conveyors endpoint twice and show `X-Cache: MISS` followed by `X-Cache: HIT`. Step a bag forward and show the next request misses/returns the new position. Stop Redis and show the application continues to work from SQLite.
+6. **Role Security & Passenger Privacy**: Log in as `ramesh` and show that only his 4 bags are visible. Show that accessing other passenger records is blocked by Java backend authorization.
+7. **Persistence**: Advance the simulated clock, restart the Java application, and show that all baggage statuses, `queuedSince` values, and audit logs remain intact in SQLite.

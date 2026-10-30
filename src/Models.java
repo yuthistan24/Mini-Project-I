@@ -171,6 +171,8 @@ abstract class Baggage {
     private String clearanceReason;
     private BaggageStatus status;
     private int estimatedTime;
+    private int queuedSince; // Simulated minute when the bag entered processing/waiting
+    private FuzzyUrgency.Result urgency; // Derived, recalculated when operational data changes
     private List<String> currentRoute;
     private String createdAt;
     private String updatedAt;
@@ -185,6 +187,8 @@ abstract class Baggage {
         this.operatorClearance = false;
         this.clearanceReason = "";
         this.estimatedTime = 0;
+        this.queuedSince = 0;
+        this.urgency = FuzzyUrgency.Result.ineligible(0, 0, 0, 0);
         this.currentRoute = new ArrayList<>();
         this.originAirport = "MAA";
         this.destinationAirport = "DEL";
@@ -221,6 +225,11 @@ abstract class Baggage {
     public String getClearanceReason() { return clearanceReason; }
     public BaggageStatus getStatus() { return status; }
     public int getEstimatedTime() { return estimatedTime; }
+    public int getQueuedSince() { return queuedSince; }
+    public FuzzyUrgency.Result getUrgency() { return urgency; }
+    public int getUrgencyScore() { return urgency != null ? urgency.score : 0; }
+    public String getUrgencyLabel() { return urgency != null ? urgency.label : "N/A"; }
+    public boolean isUrgencyEligible() { return urgency != null && urgency.eligible; }
     public List<String> getCurrentRoute() { return currentRoute; }
     public String getCreatedAt() { return createdAt; }
     public String getUpdatedAt() { return updatedAt; }
@@ -233,6 +242,10 @@ abstract class Baggage {
     public void setDestinationNode(String dest) { this.destinationNode = dest; }
     public void setStatus(BaggageStatus status) { this.status = status; }
     public void setEstimatedTime(int time) { this.estimatedTime = time; }
+    public void setQueuedSince(int queuedSince) { this.queuedSince = queuedSince; }
+    public void setUrgency(FuzzyUrgency.Result urgency) {
+        this.urgency = urgency != null ? urgency : FuzzyUrgency.Result.ineligible(0, 0, 0, 0);
+    }
     public void setCurrentRoute(List<String> route) { this.currentRoute = route != null ? route : new ArrayList<>(); }
     public void setCreatedAt(String time) { this.createdAt = time; }
     public void setUpdatedAt(String time) { this.updatedAt = time; }

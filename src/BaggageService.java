@@ -25,11 +25,12 @@ public class BaggageService {
         conveyorPlanner = new ConveyorRoutePlanner();
 
         // Deterministic PriorityQueue comparator:
-        // 1. Departure loading cutoff (earliest cutoff first)
+        // 1. Departure loading cutoff (earliest cutoff first) - ALWAYS PRIMARY
         // 2. Transfer urgency over origin baggage
         // 3. Passenger category rank (First > Business > Economy)
-        // 4. Arrival order
-        // 5. Bag ID tie-breaker
+        // 4. Fuzzy urgency score (higher urgency first, only after cutoff ties)
+        // 5. Arrival order
+        // 6. Bag ID tie-breaker
         Comparator<Baggage> baggageComparator = new Comparator<Baggage>() {
             @Override
             public int compare(Baggage b1, Baggage b2) {
@@ -51,11 +52,18 @@ public class BaggageService {
                 if (rank1 < rank2) return -1;
                 if (rank1 > rank2) return 1;
 
-                // Rule 4: Arrival sequence order
+                // Rule 4: Fuzzy urgency, consulted only after the existing cutoff,
+                // transfer and category rules have tied. It can never override cutoff.
+                int u1 = b1.getUrgencyScore();
+                int u2 = b2.getUrgencyScore();
+                if (u1 > u2) return -1;
+                if (u1 < u2) return 1;
+
+                // Rule 5: Arrival sequence order
                 if (b1.getArrivalOrder() < b2.getArrivalOrder()) return -1;
                 if (b1.getArrivalOrder() > b2.getArrivalOrder()) return 1;
 
-                // Rule 5: Deterministic bagId tie-breaker
+                // Rule 6: Deterministic bagId tie-breaker
                 return b1.getBagId().compareTo(b2.getBagId());
             }
         };
@@ -85,6 +93,9 @@ public class BaggageService {
             DatabaseManager.loadBaggage(this);
             DatabaseManager.validateAndRepairBaggageRecords(this);
         }
+
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     public Flight getFlight(String flightId) { return flights.get(flightId); }
@@ -98,6 +109,36 @@ public class BaggageService {
     public ConveyorRoutePlanner getConveyorPlanner() { return conveyorPlanner; }
     public AuthManager getAuth() { return auth; }
     public ArrayDeque<Baggage> getConveyorWaitingQueue() { return conveyorWaitingQueue; }
+
+    /**
+     * Recomputes fuzzy urgency for every bag. Called whenever baggage, flight,
+     * route, conveyor or simulated-time data changes.
+     */
+    public void refreshUrgencies() {
+        for (Baggage bag : allBaggage.values()) {
+            bag.setUrgency(FuzzyUrgency.evaluate(bag, simulatedTime));
+        }
+    }
+
+    /**
+     * PriorityQueue does not automatically re-heap after a bag's cutoff or
+     * urgency changes, so rebuild the queue from the authoritative bag map.
+     */
+    public void rebuildProcessQueue() {
+        processQueue.clear();
+        for (Baggage bag : allBaggage.values()) {
+            if (bag.getStatus() == BaggageStatus.QUEUED) {
+                processQueue.add(bag);
+            }
+        }
+    }
+
+    /** Peeks at the next bag without processing it (used by verification tests). */
+    public Baggage peekNextBaggage() {
+        refreshUrgencies();
+        rebuildProcessQueue();
+        return processQueue.peek();
+    }
 
     public void enqueueConveyorWaiting(Baggage bag) {
         if (bag != null && !conveyorWaitingQueue.contains(bag)) {
@@ -289,6 +330,9 @@ public class BaggageService {
                 "BAY-D", "BAY-D", true, "Transit security approved", BaggageStatus.LOADED);
 
         DatabaseManager.logAudit("SYSTEM", "INITIALIZE_SAMPLE_DATA", "System", simulatedTime, "SUCCESS", "32-record demonstration dataset created");
+        RedisCache.invalidateAll();
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     private Baggage createSampleBag(String bagId, String pId, String pName, BaggageDirection dir, Flight flight,
@@ -315,6 +359,8 @@ public class BaggageService {
         bag.setDestinationNode(destNode);
         bag.setClearance(cleared, clearanceReason);
         bag.setStatus(status);
+        // Deterministic stagger so the demo dataset exercises waiting-delay memberships.
+        bag.setQueuedSince(Math.max(0, simulatedTime - ((arrOrder % 4) * 5)));
 
         // Calculate initial route & ETA
         if (destNode != null && !destNode.isEmpty()) {
@@ -346,6 +392,9 @@ public class BaggageService {
         AuthManager.requireUserPermission(user, Role.ADMIN, Role.BAGGAGE_MANAGER);
         if (minutes > 0) {
             simulatedTime += minutes;
+            refreshUrgencies();
+            rebuildProcessQueue();
+            RedisCache.invalidateAllBaggageTracks();
             DatabaseManager.logAudit(user.getUsername(), "ADVANCE_TIME", "System", simulatedTime, "SUCCESS",
                     "Advanced by " + minutes + " mins to " + getFormattedSimulatedTime());
         }
@@ -403,10 +452,13 @@ public class BaggageService {
             newBag.setDestinationNode(destNode);
         }
 
+        newBag.setQueuedSince(simulatedTime);
         allBaggage.put(bagId, newBag);
         DatabaseManager.saveBaggage(newBag);
         DatabaseManager.logAudit(user.getUsername(), "REGISTER_BAGGAGE", bagId, simulatedTime, "SUCCESS",
                 "Passenger: " + passengerId + ", Type: " + newBag.getBagType());
+        refreshUrgencies();
+        rebuildProcessQueue();
         return newBag;
     }
 
@@ -423,8 +475,18 @@ public class BaggageService {
         }
 
         bag.assignFlight(flight);
+        String destination = resolveDestinationNode(bag);
+        if (destination != null && !destination.isEmpty()) {
+            RoutingResult res = conveyorPlanner.getShortestPath(bag.getCurrentLocation(), destination);
+            if (res != null) {
+                bag.setCurrentRoute(res.route);
+                bag.setEstimatedTime(res.totalTime);
+            }
+        }
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.logAudit(user.getUsername(), "ASSIGN_BAGGAGE", bagId, simulatedTime, "SUCCESS", "Assigned to flight " + flightId);
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     // ==================== SECURITY SCREENING & CLEARANCE ====================
@@ -440,11 +502,14 @@ public class BaggageService {
 
         if (bag.getStatus() == BaggageStatus.AWAITING_CLEARANCE || bag.getStatus() == BaggageStatus.REJECTED || bag.getStatus() == BaggageStatus.REGISTERED) {
             bag.setClearance(true, reason != null && !reason.isEmpty() ? reason : "Security screening passed");
-            processQueue.remove(bag);
-            processQueue.add(bag);
+            if (bag.getQueuedSince() <= 0) {
+                bag.setQueuedSince(simulatedTime);
+            }
             enqueueConveyorWaiting(bag);
             DatabaseManager.saveBaggage(bag);
             DatabaseManager.logAudit(user.getUsername(), "GRANT_CLEARANCE", bagId, simulatedTime, "SUCCESS", reason);
+            refreshUrgencies();
+            rebuildProcessQueue();
         } else {
             throw new IllegalStateException("Baggage cannot be cleared in state: " + bag.getStatus());
         }
@@ -456,10 +521,11 @@ public class BaggageService {
         if (bag == null) throw new IllegalArgumentException("Unknown Baggage ID: " + bagId);
 
         bag.setClearance(false, reason != null && !reason.isEmpty() ? reason : "Security check rejected");
-        processQueue.remove(bag);
         conveyorWaitingQueue.remove(bag);
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.logAudit(user.getUsername(), "REJECT_CLEARANCE", bagId, simulatedTime, "SUCCESS", reason);
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     // ==================== BAGGAGE PROCESSING & ROUTING ====================
@@ -470,6 +536,8 @@ public class BaggageService {
 
     public Baggage processNextBaggage(User user) {
         AuthManager.requireUserPermission(user, Role.ADMIN, Role.BAGGAGE_MANAGER);
+        refreshUrgencies();
+        rebuildProcessQueue();
         if (processQueue.isEmpty()) {
             return null;
         }
@@ -485,6 +553,8 @@ public class BaggageService {
         Baggage bag = allBaggage.get(bagId);
         if (bag == null) throw new IllegalArgumentException("Unknown Baggage ID: " + bagId);
 
+        refreshUrgencies();
+        rebuildProcessQueue();
         processQueue.remove(bag);
         conveyorWaitingQueue.remove(bag);
         processBaggageInternal(bag, user);
@@ -508,6 +578,8 @@ public class BaggageService {
         if (result == null || result.route.size() < 2) {
             bag.setStatus(BaggageStatus.EXCEPTION);
             DatabaseManager.saveBaggage(bag);
+            refreshUrgencies();
+            rebuildProcessQueue();
             throw new IllegalStateException("No available path from " + startLoc + " to " + endLoc);
         }
 
@@ -527,6 +599,8 @@ public class BaggageService {
         if (!segmentAvailable) {
             bag.setStatus(BaggageStatus.EXCEPTION);
             DatabaseManager.saveBaggage(bag);
+            refreshUrgencies();
+            rebuildProcessQueue();
             throw new IllegalStateException("Conveyor segment from " + startLoc + " to " + nextNode + " is currently offline or failed.");
         }
 
@@ -567,6 +641,8 @@ public class BaggageService {
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.logAudit(user.getUsername(), "STEP_BAGGAGE", bagId, simulatedTime, "SUCCESS",
                 startLoc + " -> " + nextNode + " (" + bag.getStatus() + ")");
+        refreshUrgencies();
+        rebuildProcessQueue();
         return bag;
     }
 
@@ -589,6 +665,8 @@ public class BaggageService {
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.saveRoutingRecord(bagId, loc, loc, 0, "COLLECTED", simulatedTime);
         DatabaseManager.logAudit(user.getUsername(), "COLLECT_BAGGAGE", bagId, simulatedTime, "SUCCESS", "Claimed at " + loc);
+        refreshUrgencies();
+        rebuildProcessQueue();
         return bag;
     }
 
@@ -612,6 +690,8 @@ public class BaggageService {
             bag.setStatus(BaggageStatus.AWAITING_CLEARANCE);
             DatabaseManager.saveBaggage(bag);
             DatabaseManager.logAudit(user.getUsername(), "PROCESS_BAG", bag.getBagId(), simulatedTime, "FAILED", "CLEARANCE_REQUIRED");
+            refreshUrgencies();
+            rebuildProcessQueue();
             throw new IllegalStateException("Security clearance required before processing bag " + bag.getBagId());
         }
 
@@ -621,6 +701,8 @@ public class BaggageService {
         if (endLoc == null || endLoc.isEmpty()) {
             bag.setStatus(BaggageStatus.AWAITING_CLEARANCE);
             DatabaseManager.saveBaggage(bag);
+            refreshUrgencies();
+            rebuildProcessQueue();
             throw new IllegalStateException("No assigned destination or loading bay for bag " + bag.getBagId());
         }
 
@@ -633,6 +715,8 @@ public class BaggageService {
             DatabaseManager.saveBaggage(bag);
             DatabaseManager.saveRoutingRecord(bag.getBagId(), startLoc, endLoc, -1, "EXCEPTION_NO_ROUTE", simulatedTime);
             DatabaseManager.logAudit(user.getUsername(), "PROCESS_BAG", bag.getBagId(), simulatedTime, "FAILED", "NO_ROUTE_AVAILABLE");
+            refreshUrgencies();
+            rebuildProcessQueue();
             return;
         }
 
@@ -648,6 +732,8 @@ public class BaggageService {
                 DatabaseManager.saveRoutingRecord(bag.getBagId(), startLoc, endLoc, result.totalTime, "MISSED_CUTOFF", simulatedTime);
                 DatabaseManager.logAudit(user.getUsername(), "PROCESS_BAG", bag.getBagId(), simulatedTime, "FAILED",
                         "MISSED_CUTOFF (Arrival: " + estimatedArrival + " > Cutoff: " + bag.getLoadingCutoff() + ")");
+                refreshUrgencies();
+                rebuildProcessQueue();
                 return;
             }
         }
@@ -672,6 +758,8 @@ public class BaggageService {
         DatabaseManager.saveBaggage(bag);
         DatabaseManager.logAudit(user.getUsername(), "PROCESS_BAG", bag.getBagId(), simulatedTime, "SUCCESS",
                 "Destination reached: " + endLoc + " (" + bag.getStatus() + ")");
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     // ==================== CONVEYOR NETWORK MANAGEMENT ====================
@@ -717,6 +805,8 @@ public class BaggageService {
                 }
             }
         }
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     // ==================== FLIGHT & BAY UPDATES ====================
@@ -754,6 +844,8 @@ public class BaggageService {
         }
 
         DatabaseManager.logAudit(user.getUsername(), "CHANGE_FLIGHT_BAY", flightId, simulatedTime, "SUCCESS", "Assigned to " + newBayId);
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     public void updateFlightCutoff(String flightId, int newCutoff, User user) {
@@ -772,6 +864,8 @@ public class BaggageService {
         }
 
         DatabaseManager.logAudit(user.getUsername(), "UPDATE_FLIGHT_CUTOFF", flightId, simulatedTime, "SUCCESS", "New cutoff: " + f.getFormattedCutoff());
+        refreshUrgencies();
+        rebuildProcessQueue();
     }
 
     // ==================== PASSENGER SEARCH & LOOKUP ====================

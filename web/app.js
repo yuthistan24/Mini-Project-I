@@ -531,6 +531,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return `<span class="badge ${badgeClass}">${status}</span>`;
     }
 
+    // Fuzzy urgency badge. Ineligible (incoming/terminal) bags show a dash.
+    function getUrgencyBadge(b) {
+        if (!b || b.urgencyEligible === false || b.urgencyScore === undefined || b.urgencyScore === null) {
+            return '<span class="subtext">—</span>';
+        }
+        const score = Number(b.urgencyScore) || 0;
+        const label = b.urgencyLabel || '';
+        let badgeClass = 'badge-success';       // LOW
+        if (score >= 85) badgeClass = 'badge-danger';      // CRITICAL
+        else if (score >= 65) badgeClass = 'badge-warning'; // HIGH
+        else if (score >= 35) badgeClass = 'badge-primary'; // MEDIUM
+
+        const tip = `${b.urgencyRule || ''} | Remaining ${b.urgencyTimeRemaining ?? '-'}m, Travel ${b.urgencyTravelTime ?? '-'}m, Wait ${b.urgencyDelay ?? '-'}m, Transfer ${b.urgencyTransfer ?? '-'}`;
+        return `<span class="badge ${badgeClass}" title="${tip.replace(/"/g, '&quot;')}">${score} ${label}</span>`;
+    }
+
+    function getUrgencyDetail(b) {
+        if (!b || b.urgencyEligible === false) {
+            return '<span class="subtext">Not applicable for this incoming/terminal bag</span>';
+        }
+        return `${getUrgencyBadge(b)} <span class="subtext" style="margin-left:0.35rem;">${b.urgencyRule || ''}</span>`;
+    }
+
     // Render Baggage Table
     function renderBaggageTable() {
         const tbody = document.getElementById('baggage-table-body');
@@ -550,7 +573,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (filtered.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding: 2rem;" class="subtext">No baggage records found matching criteria.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" style="text-align:center; padding: 2rem;" class="subtext">No baggage records found matching criteria.</td></tr>`;
             return;
         }
 
@@ -586,6 +609,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td><code>${b.currentLocation}</code></td>
                     <td><code>${b.destinationNode || '-'}</code></td>
                     <td>${b.cutoff}</td>
+                    <td>${getUrgencyBadge(b)}</td>
                     <td>${b.cleared ? '<span style="color:#10b981;">✓ Cleared</span>' : '<span style="color:#f59e0b;">⏳ Pending</span>'}</td>
                     <td>${getStatusBadge(b.status)}</td>
                     <td>${actionsHtml}</td>
@@ -1119,6 +1143,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('track-status-badge').innerHTML = getStatusBadge(b.status);
                 document.getElementById('track-eta').innerText = (b.estimatedTime >= 0) ? `${b.estimatedTime} Mins (Arrival ~ ${b.formattedSimulatedTime})` : 'N/A';
                 document.getElementById('track-cutoff').innerText = b.cutoff || 'N/A';
+                document.getElementById('track-urgency').innerHTML = getUrgencyDetail(b);
 
                 renderVisualPathway('visual-route-path', b);
 
@@ -1987,6 +2012,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('live-single-airports').innerText = `${b.originAirport} → ${b.destinationAirport} (${b.direction})`;
             document.getElementById('live-single-eta').innerText = (b.estimatedTime >= 0) ? `${b.estimatedTime} Mins (Calculated by Dijkstra)` : 'N/A';
             document.getElementById('live-single-cutoff').innerText = b.cutoff || 'N/A';
+            document.getElementById('live-single-urgency').innerHTML = getUrgencyDetail(b);
             document.getElementById('live-single-clearance').innerText = b.cleared ? '✅ Verified Cleared' : '⏳ Awaiting Screening Clearance';
             document.getElementById('live-single-updated').innerText = b.updatedAt || 'Recent';
 
@@ -2054,7 +2080,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         if (list.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="11" style="text-align:center; padding: 2rem;" class="subtext">No baggage records match the selected filter.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="12" style="text-align:center; padding: 2rem;" class="subtext">No baggage records match the selected filter.</td></tr>`;
             return;
         }
 
@@ -2071,6 +2097,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <td>${getStatusBadge(b.status)}</td>
                     <td>${b.cleared ? '✅ Cleared' : '⏳ Pending'}</td>
                     <td>${(b.estimatedTime >= 0) ? b.estimatedTime + 'm' : 'N/A'}</td>
+                    <td>${getUrgencyBadge(b)}</td>
                     <td class="subtext">${b.updatedAt || '-'}</td>
                     <td>
                         <button class="btn btn-sm btn-primary btn-track-manifest" data-id="${b.bagId}">

@@ -1,5 +1,19 @@
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TestRunner {
     private static int passed = 0;
@@ -40,6 +54,9 @@ public class TestRunner {
         testRoleRestrictionsAndClearanceAuthority(service);
         testDuplicateIdRejectionAndAudit(service);
         testSampleDataConsistency(service);
+        testFuzzyUrgencyScoring();
+        testCutoffRemainsPrimaryPriority(service);
+        testRedisCache(service);
 
         // Clean up test database file
         DatabaseManager.resetDatabaseUrl();
@@ -322,5 +339,318 @@ public class TestRunner {
             if (b.getStatus() == null) allValid = false;
         }
         assertTrue(allValid, "Every sample baggage record contains valid passenger, location, and status attributes");
+    }
+
+    // 17. Fuzzy logic urgency scoring
+    private static void testFuzzyUrgencyScoring() {
+        System.out.println("\n[Test Suite 17] Fuzzy Logic Urgency Scoring");
+
+        Flight f = new Flight("FUZZ", "MAA", "Test", 720, 650);
+
+        OriginBag criticalBag = new OriginBag("FUZZ-CRIT", "P101", "Ramesh Kumar", PassengerCategory.ECONOMY, 1);
+        criticalBag.assignFlight(f);
+        criticalBag.setLoadingCutoff(560); // 20 minutes remaining at 09:00
+        criticalBag.setEstimatedTime(35);
+        criticalBag.setQueuedSince(540);
+        FuzzyUrgency.Result critical = FuzzyUrgency.evaluate(criticalBag, 540);
+        assertTrue(critical.eligible, "Outgoing baggage with a cutoff is urgency-eligible");
+        assertTrue(critical.score >= 85 && "CRITICAL".equals(critical.label),
+                "Low remaining time + high travel time -> CRITICAL urgency (" + critical.score + ")");
+
+        OriginBag easyBag = new OriginBag("FUZZ-EASY", "P101", "Ramesh Kumar", PassengerCategory.ECONOMY, 2);
+        easyBag.setLoadingCutoff(720); // 180 minutes remaining
+        easyBag.setEstimatedTime(8);
+        easyBag.setQueuedSince(540);
+        FuzzyUrgency.Result easy = FuzzyUrgency.evaluate(easyBag, 540);
+        assertTrue(easy.score < 35 && "LOW".equals(easy.label),
+                "High remaining time + low travel time -> LOW urgency (" + easy.score + ")");
+
+        OriginBag time20 = urgencyBag("FUZZ-T20", 560, 35, 540);
+        OriginBag time40 = urgencyBag("FUZZ-T40", 580, 35, 540);
+        OriginBag time180 = urgencyBag("FUZZ-T180", 720, 35, 540);
+        assertTrue(time20.getUrgencyScore() >= time40.getUrgencyScore()
+                        && time40.getUrgencyScore() >= time180.getUrgencyScore(),
+                "Urgency does not decrease when the remaining cutoff time increases");
+
+        OriginBag travel5 = urgencyBag("FUZZ-V5", 560, 5, 540);
+        OriginBag travel25 = urgencyBag("FUZZ-V25", 560, 25, 540);
+        OriginBag travel35 = urgencyBag("FUZZ-V35", 560, 35, 540);
+        assertTrue(travel5.getUrgencyScore() <= travel25.getUrgencyScore()
+                        && travel25.getUrgencyScore() <= travel35.getUrgencyScore(),
+                "Urgency does not decrease when travel time increases");
+
+        OriginBag outgoing = urgencyBag("FUZZ-OUT", 600, 19, 540);
+        TransferBag transfer = new TransferBag("FUZZ-TR", "P101", "Ramesh Kumar", PassengerCategory.ECONOMY, 9);
+        transfer.setLoadingCutoff(600);
+        transfer.setEstimatedTime(19);
+        transfer.setQueuedSince(540);
+        int outgoingScore = FuzzyUrgency.evaluate(outgoing, 540).score;
+        int transferScore = FuzzyUrgency.evaluate(transfer, 540).score;
+        assertTrue(transferScore > outgoingScore,
+                "High transfer urgency raises the score above an equivalent outgoing bag (" + transferScore + " > " + outgoingScore + ")");
+
+        OriginBag noWait = urgencyBag("FUZZ-W0", 660, 19, 540);
+        OriginBag longWait = urgencyBag("FUZZ-W50", 660, 19, 490);
+        int noWaitScore = FuzzyUrgency.evaluate(noWait, 540).score;
+        int longWaitScore = FuzzyUrgency.evaluate(longWait, 540).score;
+        assertTrue(longWaitScore > noWaitScore,
+                "A longer processing/waiting delay raises urgency (" + longWaitScore + " > " + noWaitScore + ")");
+
+        IncomingBag incoming = new IncomingBag("FUZZ-IN", "P101", "Ramesh Kumar", PassengerCategory.ECONOMY, 10);
+        incoming.setEstimatedTime(12);
+        assertTrue(!FuzzyUrgency.evaluate(incoming, 540).eligible,
+                "Incoming baggage is not eligible for departure-cutoff urgency");
+    }
+
+    private static OriginBag urgencyBag(String id, int cutoff, int travel, int queuedSince) {
+        OriginBag bag = new OriginBag(id, "P101", "Ramesh Kumar", PassengerCategory.ECONOMY, 1);
+        bag.setLoadingCutoff(cutoff);
+        bag.setEstimatedTime(travel);
+        bag.setQueuedSince(queuedSince);
+        bag.setUrgency(FuzzyUrgency.evaluate(bag, 540));
+        return bag;
+    }
+
+    // 18. Earliest cutoff must remain the primary PriorityQueue key
+    private static void testCutoffRemainsPrimaryPriority(BaggageService service) {
+        System.out.println("\n[Test Suite 18] Earliest Loading Cutoff Remains Primary Priority");
+        User manager = DatabaseManager.getUser("manager");
+
+        Baggage earliest = service.registerBaggage("TEST-PRI-LOW", "P101", "Ramesh Kumar",
+                BaggageDirection.OUTGOING, 3, "AI101", "MAA", "DEL", "BAY-A", manager);
+        Baggage later = service.registerBaggage("TEST-PRI-HIGH", "P101", "Ramesh Kumar",
+                BaggageDirection.OUTGOING, 3, "AI101", "MAA", "DEL", "BAY-A", manager);
+        service.grantClearance("TEST-PRI-LOW", "Priority test clearance", manager);
+        service.grantClearance("TEST-PRI-HIGH", "Priority test clearance", manager);
+
+        // Earliest cutoff gets a deliberately low fuzzy score; later cutoff gets high urgency.
+        earliest.setLoadingCutoff(600);
+        earliest.setEstimatedTime(5);
+        earliest.setQueuedSince(540);
+        later.setLoadingCutoff(601);
+        later.setEstimatedTime(35);
+        later.setQueuedSince(480);
+        DatabaseManager.saveBaggage(earliest);
+        DatabaseManager.saveBaggage(later);
+        service.refreshUrgencies();
+
+        assertTrue(earliest.getUrgencyScore() < later.getUrgencyScore(),
+                "Test setup produces a lower fuzzy score for the earliest-cutoff bag");
+
+        Baggage next = service.peekNextBaggage();
+        assertTrue(next != null && "TEST-PRI-LOW".equals(next.getBagId()),
+                "Earliest loading cutoff remains first even when fuzzy urgency is lower");
+
+        service.processSpecificBaggage("TEST-PRI-LOW", manager);
+        Baggage nextAfter = service.peekNextBaggage();
+        assertTrue(nextAfter != null && "TEST-PRI-HIGH".equals(nextAfter.getBagId()),
+                "Within later cutoffs, the higher fuzzy urgency bag is dispatched next");
+        service.processSpecificBaggage("TEST-PRI-HIGH", manager);
+    }
+
+    // 19. Redis cache-aside, invalidation and graceful fallback
+    private static void testRedisCache(BaggageService service) {
+        System.out.println("\n[Test Suite 19] Redis Cache-Aside, Invalidation and Fallback");
+        assertTrue(RedisCache.getTtlSeconds() >= 30 && RedisCache.getTtlSeconds() <= 60,
+                "Redis TTL is a short 30-60 second fallback (" + RedisCache.getTtlSeconds() + "s)");
+
+        MockRedisServer server = null;
+        try {
+            server = new MockRedisServer();
+            RedisCache.setEndpointForTesting("127.0.0.1", server.getPort());
+            RedisCache.resetStatsForTesting();
+
+            AtomicInteger loads = new AtomicInteger();
+            String key = RedisCache.baggageTrackKey("CACHE-BAG-1");
+            RedisCache.Lookup first = RedisCache.fetch(key, () -> {
+                loads.incrementAndGet();
+                return "{\"currentLocation\":\"CHECK-IN\"}";
+            });
+            RedisCache.Lookup second = RedisCache.fetch(key, () -> {
+                loads.incrementAndGet();
+                return "{\"currentLocation\":\"CHECK-IN\"}";
+            });
+            assertTrue(!first.hit, "First baggage tracking request is a cache miss");
+            assertTrue(second.hit, "Second baggage tracking request is a cache hit");
+            assertTrue(loads.get() == 1, "Cache hit avoided a second database/data load");
+            assertTrue(((Number) RedisCache.getStats().get("hits")).longValue() == 1,
+                    "Redis hit counter records the served cached record");
+
+            // Position update through the real service must invalidate the old cache entry.
+            User manager = DatabaseManager.getUser("manager");
+            Baggage moving = service.registerBaggage("TEST-CACHE-BAG", "P101", "Ramesh Kumar",
+                    BaggageDirection.OUTGOING, 2, "AI101", "MAA", "DEL", "BAY-A", manager);
+            service.grantClearance("TEST-CACHE-BAG", "Cache test clearance", manager);
+            String movingKey = RedisCache.baggageTrackKey("TEST-CACHE-BAG");
+            RedisCache.put(movingKey, "{\"currentLocation\":\"CHECK-IN\"}");
+            assertTrue(RedisCache.fetch(movingKey, () -> "{}").hit,
+                    "Old baggage position was cached before the update");
+
+            service.stepBaggageNextNode("TEST-CACHE-BAG", manager);
+            assertTrue("SORTING".equals(moving.getCurrentLocation()),
+                    "Baggage position updated through the simulated conveyor step");
+
+            RedisCache.Lookup fresh = RedisCache.fetch(movingKey,
+                    () -> "{\"currentLocation\":\"" + moving.getCurrentLocation() + "\"}");
+            assertTrue(!fresh.hit && fresh.value.contains("SORTING") && !fresh.value.contains("CHECK-IN"),
+                    "Cache invalidation prevents an old baggage position from being displayed");
+
+            // Flight and conveyor caches follow the same cache-aside pattern.
+            RedisCache.put(RedisCache.FLIGHTS_KEY, "[{\"flightId\":\"AI101\"}]");
+            assertTrue(RedisCache.fetch(RedisCache.FLIGHTS_KEY, () -> "[]").hit,
+                    "Flight details are served from Redis on a hit");
+            RedisCache.invalidateFlights();
+            RedisCache.Lookup flightMiss = RedisCache.fetch(RedisCache.FLIGHTS_KEY, () -> "[]");
+            assertTrue(!flightMiss.hit && "[]".equals(flightMiss.value),
+                    "Flight changes invalidate cached flight details");
+
+            RedisCache.put(RedisCache.CONVEYORS_KEY, "[{\"fromNode\":\"CHECK-IN\"}]");
+            assertTrue(RedisCache.fetch(RedisCache.CONVEYORS_KEY, () -> "[]").hit,
+                    "Conveyor network information is served from Redis on a hit");
+            RedisCache.invalidateConveyors();
+            RedisCache.Lookup conveyorMiss = RedisCache.fetch(RedisCache.CONVEYORS_KEY, () -> "[]");
+            assertTrue(!conveyorMiss.hit && "[]".equals(conveyorMiss.value),
+                    "Conveyor availability changes invalidate cached network information");
+
+            // Reloading from SQLite shows the new position, so tracking still follows the DB.
+            BaggageService reloaded = new BaggageService(new AuthManager());
+            Baggage persisted = reloaded.getBaggage("TEST-CACHE-BAG");
+            assertTrue(persisted != null && "SORTING".equals(persisted.getCurrentLocation()),
+                    "Passenger tracking reflects the updated position after a SQLite reload");
+        } catch (IOException e) {
+            assertTrue(false, "Mock Redis server could not start: " + e.getMessage());
+        } finally {
+            if (server != null) server.stop();
+            RedisCache.resetEndpointForTesting();
+        }
+
+        // Point at a closed port to prove the application keeps working without Redis.
+        RedisCache.setEndpointForTesting("127.0.0.1", 1);
+        AtomicInteger fallbackLoads = new AtomicInteger();
+        RedisCache.Lookup fallback = RedisCache.fetch("fallback:verification",
+                () -> {
+                    fallbackLoads.incrementAndGet();
+                    return "{\"source\":\"SQLITE\"}";
+                });
+        assertTrue(!fallback.hit && fallback.value.contains("SQLITE") && fallbackLoads.get() == 1,
+                "Application continues with the SQLite fallback when Redis is unavailable");
+        RedisCache.resetEndpointForTesting();
+    }
+
+    // Minimal in-process RESP server used only by the verification suite.
+    static class MockRedisServer {
+        private final ServerSocket serverSocket;
+        private final Map<String, String> store = new ConcurrentHashMap<>();
+        private volatile boolean running = true;
+
+        MockRedisServer() throws IOException {
+            serverSocket = new ServerSocket(0, 50, InetAddress.getLoopbackAddress());
+            Thread thread = new Thread(() -> {
+                while (running) {
+                    try (Socket socket = serverSocket.accept()) {
+                        handle(socket);
+                    } catch (IOException e) {
+                        if (running) System.err.println("Mock Redis error: " + e.getMessage());
+                    }
+                }
+            }, "mock-redis-server");
+            thread.setDaemon(true);
+            thread.start();
+        }
+
+        int getPort() {
+            return serverSocket.getLocalPort();
+        }
+
+        void stop() {
+            running = false;
+            try {
+                serverSocket.close();
+            } catch (IOException ignored) {}
+        }
+
+        private void handle(Socket socket) throws IOException {
+            InputStream in = new BufferedInputStream(socket.getInputStream());
+            OutputStream out = new BufferedOutputStream(socket.getOutputStream());
+
+            while (running) {
+                String[] command = readCommand(in);
+                if (command == null || command.length == 0) return;
+
+                String name = command[0].toUpperCase();
+                String reply;
+                if ("GET".equals(name)) {
+                    String value = store.get(command[1]);
+                    reply = value == null ? "$-1\r\n" : bulk(value);
+                } else if ("SETEX".equals(name)) {
+                    store.put(command[1], command[3]);
+                    reply = "+OK\r\n";
+                } else if ("DEL".equals(name)) {
+                    int removed = 0;
+                    for (int i = 1; i < command.length; i++) {
+                        if (store.remove(command[i]) != null) removed++;
+                    }
+                    reply = ":" + removed + "\r\n";
+                } else if ("QUIT".equals(name)) {
+                    out.write("+OK\r\n".getBytes(StandardCharsets.UTF_8));
+                    out.flush();
+                    return;
+                } else {
+                    reply = "+OK\r\n";
+                }
+
+                out.write(reply.getBytes(StandardCharsets.UTF_8));
+                out.flush();
+            }
+        }
+
+        private String[] readCommand(InputStream in) throws IOException {
+            int first = in.read();
+            if (first == -1) return null;
+            if (first != '*') return null;
+
+            int argc = Integer.parseInt(readLine(in));
+            String[] parts = new String[argc];
+            for (int i = 0; i < argc; i++) {
+                int type = in.read();
+                if (type != '$') throw new IOException("Expected bulk string");
+                int length = Integer.parseInt(readLine(in));
+                byte[] data = readFully(in, length);
+                readFully(in, 2);
+                parts[i] = new String(data, StandardCharsets.UTF_8);
+            }
+            return parts;
+        }
+
+        private static String readLine(InputStream in) throws IOException {
+            ByteArrayOutputStream line = new ByteArrayOutputStream();
+            int b;
+            while ((b = in.read()) != -1) {
+                if (b == '\r') {
+                    int next = in.read();
+                    if (next != '\n') throw new IOException("Malformed mock Redis line ending");
+                    break;
+                }
+                line.write(b);
+            }
+            if (b == -1) throw new EOFException("Mock Redis connection closed");
+            return line.toString(StandardCharsets.UTF_8.name());
+        }
+
+        private static byte[] readFully(InputStream in, int length) throws IOException {
+            byte[] data = new byte[length];
+            int offset = 0;
+            while (offset < length) {
+                int read = in.read(data, offset, length - offset);
+                if (read == -1) throw new EOFException("Mock Redis connection closed");
+                offset += read;
+            }
+            return data;
+        }
+
+        private static String bulk(String value) {
+            byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+            return "$" + bytes.length + "\r\n" + value + "\r\n";
+        }
     }
 }

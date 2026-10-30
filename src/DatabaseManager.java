@@ -93,6 +93,7 @@ public class DatabaseManager {
                 + "clearanceReason TEXT DEFAULT '',"
                 + "status TEXT NOT NULL,"
                 + "estimatedTime INTEGER DEFAULT 0,"
+                + "queuedSince INTEGER DEFAULT 540,"
                 + "createdAt DATETIME DEFAULT CURRENT_TIMESTAMP,"
                 + "updatedAt DATETIME DEFAULT CURRENT_TIMESTAMP"
                 + ");";
@@ -142,6 +143,7 @@ public class DatabaseManager {
                 addColumnIfNotExists(stmt, "Baggage", "destinationAirport", "TEXT DEFAULT 'DEL'");
                 addColumnIfNotExists(stmt, "Baggage", "createdAt", "TEXT DEFAULT ''");
                 addColumnIfNotExists(stmt, "Baggage", "updatedAt", "TEXT DEFAULT ''");
+                addColumnIfNotExists(stmt, "Baggage", "queuedSince", "INTEGER DEFAULT 540");
             }
         } catch (SQLException e) {
             System.err.println("Database initialization error: " + e.getMessage());
@@ -356,8 +358,8 @@ public class DatabaseManager {
     // ==================== BAGGAGE ====================
 
     public static void saveBaggage(Baggage bag) {
-        String sql = "INSERT OR REPLACE INTO Baggage (bagId, passengerId, passengerName, bagType, direction, flightId, categoryRank, arrivalOrder, originAirport, destinationAirport, currentLocation, destinationNode, loadingCutoff, operatorClearance, clearanceReason, status, estimatedTime, updatedAt) "
-                + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))";
+        String sql = "INSERT OR REPLACE INTO Baggage (bagId, passengerId, passengerName, bagType, direction, flightId, categoryRank, arrivalOrder, originAirport, destinationAirport, currentLocation, destinationNode, loadingCutoff, operatorClearance, clearanceReason, status, estimatedTime, queuedSince, updatedAt) "
+                + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'))";
         try (Connection conn = connect(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
             pstmt.setString(1, bag.getBagId());
             pstmt.setString(2, bag.getPassengerId());
@@ -376,7 +378,10 @@ public class DatabaseManager {
             pstmt.setString(15, bag.getClearanceReason());
             pstmt.setString(16, bag.getStatus().toString());
             pstmt.setInt(17, bag.getEstimatedTime());
+            pstmt.setInt(18, bag.getQueuedSince());
             pstmt.executeUpdate();
+            // SQLite is the source of truth: only invalidate after a successful commit.
+            RedisCache.invalidateBaggage(bag.getBagId());
         } catch (SQLException e) {
             System.err.println("Error saving baggage: " + e.getMessage());
         }
@@ -402,6 +407,7 @@ public class DatabaseManager {
                 String clearanceReason = rs.getString("clearanceReason");
                 String statusStr = rs.getString("status");
                 int estTime = rs.getInt("estimatedTime");
+                int queuedSince = rs.getInt("queuedSince");
                 String createdAt = rs.getString("createdAt");
                 String updatedAt = rs.getString("updatedAt");
 
@@ -424,6 +430,7 @@ public class DatabaseManager {
                 bag.setCurrentLocation(currentLoc);
                 bag.setEstimatedTime(estTime);
                 bag.setLoadingCutoff(cutoff);
+                bag.setQueuedSince(queuedSince);
                 if (createdAt != null) bag.setCreatedAt(createdAt);
                 if (updatedAt != null) bag.setUpdatedAt(updatedAt);
 
@@ -469,6 +476,7 @@ public class DatabaseManager {
             pstmt.setInt(5, flight.getLoadingCutoff());
             pstmt.setString(6, flight.getAssignedBay() != null ? flight.getAssignedBay().getBayId() : null);
             pstmt.executeUpdate();
+            RedisCache.invalidateFlights();
         } catch (SQLException e) {
             System.err.println("Error saving flight: " + e.getMessage());
         }
@@ -506,6 +514,7 @@ public class DatabaseManager {
             pstmt.setString(1, bay.getBayId());
             pstmt.setString(2, bay.getAssignedFlight() != null ? bay.getAssignedFlight().getFlightId() : null);
             pstmt.executeUpdate();
+            RedisCache.invalidateFlights();
         } catch (SQLException e) {
             System.err.println("Error saving loading bay: " + e.getMessage());
         }
@@ -521,6 +530,8 @@ public class DatabaseManager {
             pstmt.setInt(3, segment.getProcessingTime());
             pstmt.setInt(4, segment.isAvailable() ? 1 : 0);
             pstmt.executeUpdate();
+            RedisCache.invalidateConveyors();
+            RedisCache.invalidateAllBaggageTracks();
         } catch (SQLException e) {
             System.err.println("Error saving conveyor segment: " + e.getMessage());
         }
@@ -554,6 +565,7 @@ public class DatabaseManager {
             pstmt.setString(5, status);
             pstmt.setInt(6, simTime);
             pstmt.executeUpdate();
+            RedisCache.invalidateBaggage(bagId);
         } catch (SQLException e) {
             System.err.println("Error saving routing record: " + e.getMessage());
         }
@@ -652,6 +664,7 @@ public class DatabaseManager {
             System.err.println("Clean reset error: " + e.getMessage());
         }
         initializeDatabase();
+        RedisCache.invalidateAll();
     }
 
     public static int validateAndRepairBaggageRecords(BaggageService service) {
@@ -702,6 +715,7 @@ public class DatabaseManager {
                     pstmt.setString(2, fix[0]);
                     pstmt.executeUpdate();
                     repairedCount++;
+                    RedisCache.invalidateBaggage(fix[0]);
                     logAudit("SYSTEM", "DATA_REPAIR", fix[0], (service != null ? service.getSimulatedTime() : 540), "REPAIRED", fix[3]);
                 }
             }
@@ -713,6 +727,7 @@ public class DatabaseManager {
 
     public static void syncBaggageFromDatabase(BaggageService service) {
         if (service == null) return;
+        RedisCache.invalidateAllBaggageTracks();
         service.getAllBaggage().clear();
         loadBaggage(service);
     }
