@@ -38,6 +38,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ==================== INITIALIZATION ====================
 
+    initTheme();
     checkExistingSession();
     setupAuthListeners();
     setupNavigation();
@@ -48,6 +49,39 @@ document.addEventListener('DOMContentLoaded', () => {
     setupSecurityListeners();
     setupUserManagementListeners();
     setupSimulatedClock();
+
+    // ==================== THEME MANAGEMENT ====================
+
+    function initTheme() {
+        const savedTheme = localStorage.getItem('vaanam_theme') || 
+            (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+        applyTheme(savedTheme);
+
+        const themeToggleBtn = document.getElementById('theme-toggle-btn');
+        if (themeToggleBtn) {
+            themeToggleBtn.addEventListener('click', () => {
+                const current = document.documentElement.getAttribute('data-theme') || 'light';
+                const next = current === 'dark' ? 'light' : 'dark';
+                applyTheme(next);
+            });
+        }
+    }
+
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        localStorage.setItem('vaanam_theme', theme);
+        const icon = document.getElementById('theme-toggle-icon');
+        const text = document.getElementById('theme-toggle-text');
+        if (icon) icon.innerText = theme === 'dark' ? '☀️' : '🌙';
+        if (text) text.innerText = theme === 'dark' ? 'Light' : 'Dark';
+
+        // Re-render graphs so SVG colors adapt immediately
+        if (state.currentView === 'tracking') {
+            renderLiveConveyorGraph();
+        } else if (state.currentView === 'passenger-portal' && state.activeTrackedBagId) {
+            renderPassengerLiveRoute(state.activeTrackedBagId, true);
+        }
+    }
 
     // ==================== SESSION & AUTH ====================
 
@@ -83,6 +117,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const isAdmin = (state.currentRole === 'ADMIN');
         const isManager = (state.currentRole === 'BAGGAGE_MANAGER');
         const canClear = state.clearanceAuthority;
+
+        // Group navigation containers
+        const passNavSection = document.getElementById('passenger-nav-section');
+        const staffNavSection = document.getElementById('staff-nav-section');
+        if (passNavSection) passNavSection.style.display = isPassenger ? 'block' : 'none';
+        if (staffNavSection) staffNavSection.style.display = isPassenger ? 'none' : 'block';
 
         // Navigation elements
         const navPassenger = document.getElementById('nav-item-passenger');
@@ -412,6 +452,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 document.getElementById('dash-stat-missed').innerText = stats.missedCutoff || 0;
                 document.getElementById('dash-stat-conveyors').innerText = `${stats.availableConveyors || 0} / ${stats.totalConveyors || 0}`;
                 if (stats.formattedTime) simulatedClockTime.innerText = stats.formattedTime;
+                renderBaggageFlowDistribution(stats);
             }
         } catch (e) {
             console.error('Error loading stats', e);
@@ -426,8 +467,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (res.ok) {
                 state.baggageList = await res.json();
                 renderBaggageTable();
+                renderPriorityQueue();
                 renderSecurityTable();
                 renderAttentionTable();
+                renderFlightLoadingProgress();
 
                 if (state.currentRole === 'PASSENGER') {
                     renderPassengerBags();
@@ -458,6 +501,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 state.flightList = await res.json();
                 renderFlightsTables();
                 populateFlightSelects();
+                renderFlightLoadingProgress();
             }
         } catch (e) {
             console.error('Error loading flights', e);
@@ -634,6 +678,164 @@ document.addEventListener('DOMContentLoaded', () => {
         tbody.querySelectorAll('.btn-screen-bag').forEach(btn => {
             btn.addEventListener('click', () => openClearanceModal(btn.getAttribute('data-id')));
         });
+    }
+
+    // Render Priority Processing Queue (Baggage Operations View)
+    function renderPriorityQueue() {
+        const tbody = document.getElementById('priority-queue-body');
+        if (!tbody) return;
+
+        const queuedBags = (state.baggageList || []).filter(b => b.status === 'QUEUED');
+
+        if (queuedBags.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="9" style="text-align:center; padding: 1.5rem;" class="subtext">Conveyor queue is clear. No bags waiting for induction.</td></tr>`;
+            return;
+        }
+
+        // Sort according to deterministic priority order:
+        // 1. Loading cutoff (earliest first)
+        // 2. Transfer bag over origin bag
+        // 3. Category rank (1: First, 2: Business, 3: Economy)
+        // 4. Urgency score (higher first)
+        const sorted = [...queuedBags].sort((b1, b2) => {
+            const c1 = b1.cutoff && b1.cutoff !== 'N/A' ? parseInt(b1.cutoff.replace(':', ''), 10) : 99999;
+            const c2 = b2.cutoff && b2.cutoff !== 'N/A' ? parseInt(b2.cutoff.replace(':', ''), 10) : 99999;
+            if (c1 !== c2) return c1 - c2;
+
+            const t1 = (b1.direction === 'TRANSFER');
+            const t2 = (b2.direction === 'TRANSFER');
+            if (t1 && !t2) return -1;
+            if (!t1 && t2) return 1;
+
+            const r1 = b1.category && b1.category.includes('First') ? 1 : (b1.category && b1.category.includes('Business') ? 2 : 3);
+            const r2 = b2.category && b2.category.includes('First') ? 1 : (b2.category && b2.category.includes('Business') ? 2 : 3);
+            if (r1 !== r2) return r1 - r2;
+
+            return (b2.urgencyScore || 0) - (b1.urgencyScore || 0);
+        });
+
+        const canOperate = (state.currentRole === 'ADMIN' || state.currentRole === 'BAGGAGE_MANAGER');
+
+        tbody.innerHTML = sorted.map((b, idx) => {
+            let actionsHtml = `<button class="btn btn-sm btn-outline btn-track-bag" data-id="${b.bagId}">🔍 Track</button>`;
+            if (canOperate) {
+                actionsHtml += ` <button class="btn btn-sm btn-primary btn-step-bag" data-id="${b.bagId}" title="Step to next conveyor node">👟 Step</button>`;
+                actionsHtml += ` <button class="btn btn-sm btn-success btn-process-bag" data-id="${b.bagId}" title="Process entire route">▶ Run</button>`;
+            }
+
+            return `
+                <tr>
+                    <td><strong>#${idx + 1}</strong></td>
+                    <td><strong>${b.bagId}</strong></td>
+                    <td>${b.passengerName} <span class="subtext">(${b.passengerId})</span></td>
+                    <td>${b.category}</td>
+                    <td><code>${b.flightId || 'TRANSFER'}</code></td>
+                    <td><code>${b.destinationNode || '-'}</code></td>
+                    <td><strong>${b.cutoff || '-'}</strong></td>
+                    <td>${getUrgencyBadge(b)}</td>
+                    <td>${actionsHtml}</td>
+                </tr>
+            `;
+        }).join('');
+
+        tbody.querySelectorAll('.btn-track-bag').forEach(btn => {
+            btn.addEventListener('click', () => openTrackingModal(btn.getAttribute('data-id')));
+        });
+        tbody.querySelectorAll('.btn-step-bag').forEach(btn => {
+            btn.addEventListener('click', () => stepBaggageNode(btn.getAttribute('data-id')));
+        });
+        tbody.querySelectorAll('.btn-process-bag').forEach(btn => {
+            btn.addEventListener('click', () => processBaggageDirect(btn.getAttribute('data-id')));
+        });
+    }
+
+    // Render Baggage Status Flow & Distribution Chart
+    function renderBaggageFlowDistribution(stats) {
+        const bar = document.getElementById('flow-segmented-bar');
+        const legend = document.getElementById('flow-legend-grid');
+        const totalBadge = document.getElementById('dash-flow-total-badge');
+        if (!bar || !legend) return;
+
+        const total = stats.total || (state.baggageList || []).length || 1;
+        if (totalBadge) totalBadge.innerText = `${stats.total || 0} Total Bags`;
+
+        const queued = stats.queued || 0;
+        const inTransit = stats.inTransit || 0;
+        const awaiting = stats.awaitingClearance || 0;
+        const loaded = stats.loaded || 0;
+        const collected = stats.collected || 0;
+        const exceptions = (stats.missedCutoff || 0) + (stats.exceptions || 0);
+
+        const items = [
+            { label: 'Queued', count: queued, color: '#2563eb', cls: 'flow-queued' },
+            { label: 'In Transit', count: inTransit, color: '#0284c7', cls: 'flow-intransit' },
+            { label: 'Awaiting Screening', count: awaiting, color: '#d97706', cls: 'flow-clearance' },
+            { label: 'Loaded', count: loaded, color: '#16a34a', cls: 'flow-loaded' },
+            { label: 'Claimed / Collected', count: collected, color: '#0d9488', cls: 'flow-collected' },
+            { label: 'Missed / Exception', count: exceptions, color: '#dc2626', cls: 'flow-missed' }
+        ];
+
+        bar.innerHTML = items.map(it => {
+            const pct = total > 0 ? ((it.count / total) * 100).toFixed(1) : 0;
+            return `<div class="flow-segment ${it.cls}" style="width: ${pct}%;" title="${it.label}: ${it.count} (${pct}%)"></div>`;
+        }).join('');
+
+        legend.innerHTML = items.map(it => {
+            const pct = total > 0 ? Math.round((it.count / total) * 100) : 0;
+            return `
+                <div class="flow-legend-item">
+                    <span class="flow-dot" style="background-color: ${it.color};"></span>
+                    <span><strong>${it.label}:</strong> ${it.count} <span class="subtext">(${pct}%)</span></span>
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Render Flight Loading Readiness & Cutoff Progress Cards
+    function renderFlightLoadingProgress() {
+        const container = document.getElementById('flight-progress-container');
+        if (!container) return;
+
+        if (!state.flightList || state.flightList.length === 0) {
+            container.innerHTML = `<div class="subtext" style="padding:1rem; text-align:center;">No active flight schedules found.</div>`;
+            return;
+        }
+
+        const simTime = state.simulatedTime || 540;
+
+        container.innerHTML = state.flightList.map(f => {
+            const assignedBags = (state.baggageList || []).filter(b => b.flightId === f.flightId);
+            const totalAssigned = assignedBags.length;
+            const loadedCount = assignedBags.filter(b => b.status === 'LOADED').length;
+            const pct = totalAssigned > 0 ? Math.round((loadedCount / totalAssigned) * 100) : 0;
+
+            const remaining = f.loadingCutoff - simTime;
+            let cutoffBadge = '';
+            if (remaining <= 0) {
+                cutoffBadge = `<span class="badge badge-danger">Cutoff Passed (${f.formattedCutoff})</span>`;
+            } else if (remaining <= 30) {
+                cutoffBadge = `<span class="badge badge-warning">Cutoff in ${remaining}m (${f.formattedCutoff})</span>`;
+            } else {
+                cutoffBadge = `<span class="badge badge-outline">Cutoff: ${f.formattedCutoff} (${remaining}m)</span>`;
+            }
+
+            return `
+                <div class="flight-progress-card">
+                    <div class="flight-progress-header">
+                        <span class="flight-code">${f.flightId}</span>
+                        <span class="badge badge-primary">${f.assignedBay || 'UNASSIGNED'}</span>
+                    </div>
+                    <div class="flight-route" title="${f.origin} → ${f.destination}">${f.origin} → ${f.destination}</div>
+                    <div class="progress-track">
+                        <div class="progress-fill" style="width: ${pct}%;"></div>
+                    </div>
+                    <div class="flight-progress-footer">
+                        <span><strong>${loadedCount}/${totalAssigned}</strong> bags loaded (${pct}%)</span>
+                        ${cutoffBadge}
+                    </div>
+                </div>
+            `;
+        }).join('');
     }
 
     // Render Passenger Personal Bags Grid (PASSENGER role)
@@ -1208,32 +1410,40 @@ document.addEventListener('DOMContentLoaded', () => {
         const refreshBtn = document.getElementById('baggage-refresh-btn');
         if (refreshBtn) refreshBtn.addEventListener('click', () => loadBaggage());
 
-        // Process Next Bag
+        // Process Next Bag (Toolbar)
         const btnProcessNext = document.getElementById('btn-process-next-bag');
         if (btnProcessNext) {
-            btnProcessNext.addEventListener('click', async () => {
-                try {
-                    const res = await fetch('/api/baggage/process', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({})
-                    });
-                    const data = await res.json();
-                    if (res.ok) {
-                        if (data.status === 'Queue is empty') {
-                            showToast('Priority Queue is empty.', 'info');
-                        } else {
-                            showToast(`Processed ${data.bagId} to ${data.currentLocation} (${data.bagStatus})`, 'success');
-                            loadBaggage();
-                            loadStats();
-                        }
+            btnProcessNext.addEventListener('click', triggerProcessNextBag);
+        }
+
+        // Process Next in Priority Queue
+        const btnProcessPriority = document.getElementById('btn-process-next-priority');
+        if (btnProcessPriority) {
+            btnProcessPriority.addEventListener('click', triggerProcessNextBag);
+        }
+
+        async function triggerProcessNextBag() {
+            try {
+                const res = await fetch('/api/baggage/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    if (data.status === 'Queue is empty') {
+                        showToast('Priority Queue is empty.', 'info');
                     } else {
-                        showToast(data.error || 'Processing failed', 'error');
+                        showToast(`Processed highest priority bag ${data.bagId} to ${data.currentLocation} (${data.bagStatus})`, 'success');
+                        loadBaggage();
+                        loadStats();
                     }
-                } catch (e) {
-                    showToast('Connection error', 'error');
+                } else {
+                    showToast(data.error || 'Processing failed', 'error');
                 }
-            });
+            } catch (e) {
+                showToast('Connection error', 'error');
+            }
         }
 
         // Open Register Bag Modal
@@ -1676,20 +1886,20 @@ document.addEventListener('DOMContentLoaded', () => {
     const POLLING_INTERVAL_MS = 2500;
 
     const NETWORK_NODE_LAYOUT = {
-        'CHECK-IN': { x: 90, y: 110, label: 'CHECK-IN', sub: 'Origins' },
-        'UNLOAD-POINT': { x: 90, y: 390, label: 'UNLOAD', sub: 'Arrivals' },
-        'SORTING': { x: 260, y: 110, label: 'SORTING', sub: 'Main Hub' },
-        'TRANSFER-B': { x: 430, y: 80, label: 'XFER-B', sub: 'Express' },
-        'TRANSFER-A': { x: 430, y: 250, label: 'XFER-A', sub: 'Transfer' },
-        'CENTRAL': { x: 600, y: 180, label: 'CENTRAL', sub: 'Router' },
-        'BAY-AREA': { x: 760, y: 120, label: 'BAY-AREA', sub: 'Manifold' },
-        'BAY-A': { x: 940, y: 50, label: 'BAY-A', sub: 'AI101' },
-        'BAY-B': { x: 940, y: 110, label: 'BAY-B', sub: 'EK502' },
-        'BAY-C': { x: 940, y: 170, label: 'BAY-C', sub: '6E204' },
-        'BAY-D': { x: 940, y: 230, label: 'BAY-D', sub: 'BA118' },
-        'CLAIM-AREA': { x: 760, y: 390, label: 'CLAIM-AREA', sub: 'Arrivals' },
-        'CLAIM-CAROUSEL-1': { x: 940, y: 350, label: 'CAROUSEL-1', sub: 'Domestic' },
-        'CLAIM-CAROUSEL-2': { x: 940, y: 430, label: 'CAROUSEL-2', sub: 'Intl' }
+        'CHECK-IN': { x: 90, y: 120, label: 'CHECK-IN', sub: 'Origins' },
+        'UNLOAD-POINT': { x: 90, y: 400, label: 'UNLOAD', sub: 'Arrivals' },
+        'SORTING': { x: 270, y: 120, label: 'SORTING', sub: 'Main Hub' },
+        'TRANSFER-B': { x: 440, y: 70, label: 'XFER-B', sub: 'Express' },
+        'TRANSFER-A': { x: 440, y: 250, label: 'XFER-A', sub: 'Interline' },
+        'CENTRAL': { x: 620, y: 170, label: 'CENTRAL', sub: 'Router' },
+        'BAY-AREA': { x: 790, y: 120, label: 'BAY-AREA', sub: 'Manifold' },
+        'BAY-A': { x: 960, y: 50, label: 'BAY-A', sub: 'BAY-A' },
+        'BAY-B': { x: 960, y: 110, label: 'BAY-B', sub: 'BAY-B' },
+        'BAY-C': { x: 960, y: 170, label: 'BAY-C', sub: 'BAY-C' },
+        'BAY-D': { x: 960, y: 230, label: 'BAY-D', sub: 'BAY-D' },
+        'CLAIM-AREA': { x: 790, y: 400, label: 'CLAIM-AREA', sub: 'Arrivals' },
+        'CLAIM-CAROUSEL-1': { x: 960, y: 360, label: 'CAROUSEL-1', sub: 'Domestic' },
+        'CLAIM-CAROUSEL-2': { x: 960, y: 440, label: 'CAROUSEL-2', sub: 'Intl' }
     };
 
     function setupLiveTracking() {
@@ -1906,16 +2116,25 @@ document.addEventListener('DOMContentLoaded', () => {
             clearInterval(state.pollingTimer);
             state.pollingTimer = null;
         }
+        const topbarBadge = document.getElementById('topbar-poll-badge');
+        if (topbarBadge) {
+            topbarBadge.innerHTML = '<span class="poll-dot paused"></span><span>Paused</span>';
+        }
     }
 
     async function pollLiveTracking() {
         try {
             const res = await fetch('/api/tracking/live');
+            const statusBadge = document.getElementById('tracking-poll-status');
+            const topbarBadge = document.getElementById('topbar-poll-badge');
+
             if (!res.ok) {
-                const statusBadge = document.getElementById('tracking-poll-status');
                 if (statusBadge) {
                     statusBadge.className = 'poll-badge error';
                     statusBadge.innerText = '⚠️ Server Reconnecting';
+                }
+                if (topbarBadge) {
+                    topbarBadge.innerHTML = '<span class="poll-dot offline"></span><span>Reconnecting</span>';
                 }
                 return;
             }
@@ -1926,10 +2145,12 @@ document.addEventListener('DOMContentLoaded', () => {
             state.conveyorList = data.conveyors || [];
 
             // Update status badge & last polled timestamp
-            const statusBadge = document.getElementById('tracking-poll-status');
             if (statusBadge && state.pollingActive) {
                 statusBadge.className = 'poll-badge online';
                 statusBadge.innerText = '🟢 Polling Active (2.5s)';
+            }
+            if (topbarBadge && state.pollingActive) {
+                topbarBadge.innerHTML = '<span class="poll-dot"></span><span>Live</span>';
             }
             const lastPolledEl = document.getElementById('tracking-last-polled');
             if (lastPolledEl) {
@@ -1942,18 +2163,21 @@ document.addEventListener('DOMContentLoaded', () => {
                 bagsCountBadge.innerText = `${(data.baggage || []).length} Bags on Network`;
             }
 
-            // If active view is tracking, refresh table, inspector & graph
-            if (state.currentView === 'tracking') {
+            // Refresh UI depending on active view
+            if (state.currentView === 'dashboard') {
+                loadStats();
+                renderFlightLoadingProgress();
+            } else if (state.currentView === 'baggage') {
+                renderBaggageTable();
+                renderPriorityQueue();
+            } else if (state.currentView === 'tracking') {
                 renderLiveManifestTable();
                 if (state.trackingMode === 'SINGLE' && state.trackingSelectedBagId) {
                     refreshSingleBagInspector(state.trackingSelectedBagId);
                 } else {
                     renderLiveConveyorGraph();
                 }
-            }
-
-            // If active view is passenger-portal, refresh passenger cards & route
-            if (state.currentView === 'passenger-portal') {
+            } else if (state.currentView === 'passenger-portal') {
                 renderPassengerBags();
                 if (state.activeTrackedBagId) {
                     renderPassengerLiveRoute(state.activeTrackedBagId, true);
@@ -1964,6 +2188,10 @@ document.addEventListener('DOMContentLoaded', () => {
             if (statusBadge) {
                 statusBadge.className = 'poll-badge error';
                 statusBadge.innerText = '⚠️ Network Disconnected';
+            }
+            const topbarBadge = document.getElementById('topbar-poll-badge');
+            if (topbarBadge) {
+                topbarBadge.innerHTML = '<span class="poll-dot offline"></span><span>Disconnected</span>';
             }
         }
     }
@@ -2155,19 +2383,25 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // Build defs with arrow markers
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const defaultArrowColor = isDark ? '#64748b' : '#94a3b8';
+        const routeArrowColor = '#2563eb';
+        const completedArrowColor = '#10b981';
+        const failedArrowColor = '#ef4444';
+
         let svgContent = `
             <defs>
                 <marker id="arrow-default-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#94a3b8"/>
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${defaultArrowColor}"/>
                 </marker>
                 <marker id="arrow-route-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#2563eb"/>
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${routeArrowColor}"/>
                 </marker>
                 <marker id="arrow-completed-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#10b981"/>
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${completedArrowColor}"/>
                 </marker>
                 <marker id="arrow-failed-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="#ef4444"/>
+                    <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${failedArrowColor}"/>
                 </marker>
             </defs>
         `;
@@ -2204,12 +2438,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const mx = (u.x + v.x) / 2;
             const my = (u.y + v.y) / 2;
             const timeLabel = isFailed ? 'JAM' : `${s.processingTime}m`;
-            const bgFill = isFailed ? '#fee2e2' : (isRoute ? '#dbeafe' : '#ffffff');
-            const textColor = isFailed ? '#b91c1c' : (isRoute ? '#1d4ed8' : '#475569');
+            const bgFill = isFailed 
+                ? (isDark ? '#7f1d1d' : '#fee2e2') 
+                : (isRoute ? (isDark ? '#1e3a8a' : '#dbeafe') : (isDark ? '#1e293b' : '#ffffff'));
+            const textColor = isFailed 
+                ? (isDark ? '#fca5a5' : '#b91c1c') 
+                : (isRoute ? (isDark ? '#93c5fd' : '#1d4ed8') : (isDark ? '#e2e8f0' : '#475569'));
+            const strokeColor = isFailed
+                ? (isDark ? '#991b1b' : '#fca5a5')
+                : (isRoute ? (isDark ? '#3b82f6' : '#93c5fd') : (isDark ? '#475569' : '#cbd5e1'));
 
             svgContent += `
                 <g transform="translate(${mx}, ${my})">
-                    <rect class="edge-weight-bg" x="-14" y="-8" width="28" height="16" fill="${bgFill}"></rect>
+                    <rect class="edge-weight-bg" x="-15" y="-8" width="30" height="16" rx="3" fill="${bgFill}" stroke="${strokeColor}"></rect>
                     <text class="edge-weight-text" fill="${textColor}">${timeLabel}</text>
                 </g>
             `;
@@ -2241,42 +2482,56 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const isSelectedNode = selectedBagDetail && (selectedBagDetail.currentLocation === nodeId);
 
+            let dynamicSub = pos.sub;
+            if (nodeId.startsWith('BAY-')) {
+                const assigned = (state.flightList || []).find(f => f.assignedBay === nodeId);
+                if (assigned) {
+                    dynamicSub = assigned.flightId;
+                }
+            }
+
             svgContent += `
                 <g class="conveyor-node-group" data-node="${nodeId}" title="${nodeId}: ${bagsAtNode.length} bag(s) present">
                     <circle class="node-circle ${colorClass} ${isSelectedNode ? 'node-selected' : ''}" cx="${pos.x}" cy="${pos.y}" r="22"></circle>
                     <text class="node-label" x="${pos.x}" y="${pos.y - 28}">${pos.label}</text>
-                    <text class="node-sublabel" x="${pos.x}" y="${pos.y - 39}">${pos.sub}</text>
+                    <text class="node-sublabel" x="${pos.x}" y="${pos.y - 39}">${dynamicSub}</text>
             `;
 
             // Baggage IDs pill under node
+            const normalPillFill = isDark ? '#0284c7' : '#0f172a';
+
             if (bagsAtNode.length === 1) {
                 const b = bagsAtNode[0];
                 const isBagSelected = selectedBagDetail && (selectedBagDetail.bagId === b.bagId);
-                const pillFill = isBagSelected ? '#2563eb' : '#0f172a';
+                const pillFill = isBagSelected ? '#2563eb' : normalPillFill;
                 svgContent += `
                     <g class="node-bag-pill-group" data-bagid="${b.bagId}">
-                        <rect class="node-bag-pill" x="${pos.x - 30}" y="${pos.y + 25}" width="60" height="17" fill="${pillFill}"></rect>
+                        <rect class="node-bag-pill" x="${pos.x - 30}" y="${pos.y + 25}" width="60" height="17" rx="3" fill="${pillFill}"></rect>
                         <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34}">${b.bagId}</text>
                     </g>
                 `;
             } else if (bagsAtNode.length === 2) {
                 const b1 = bagsAtNode[0];
                 const b2 = bagsAtNode[1];
+                const fill1 = (selectedBagDetail && selectedBagDetail.bagId === b1.bagId) ? '#2563eb' : normalPillFill;
+                const fill2 = (selectedBagDetail && selectedBagDetail.bagId === b2.bagId) ? '#2563eb' : normalPillFill;
                 svgContent += `
                     <g class="node-bag-pill-group" data-bagid="${b1.bagId}">
-                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 25}" width="64" height="15"></rect>
+                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 25}" width="64" height="15" rx="3" fill="${fill1}"></rect>
                         <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 33}">${b1.bagId}</text>
                     </g>
                     <g class="node-bag-pill-group" data-bagid="${b2.bagId}">
-                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 42}" width="64" height="15"></rect>
+                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 42}" width="64" height="15" rx="3" fill="${fill2}"></rect>
                         <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 50}">${b2.bagId}</text>
                     </g>
                 `;
             } else if (bagsAtNode.length > 2) {
                 const bagListStr = bagsAtNode.map(b => b.bagId).join(', ');
+                const hasSelected = selectedBagDetail && bagsAtNode.some(b => b.bagId === selectedBagDetail.bagId);
+                const multiFill = hasSelected ? '#2563eb' : (isDark ? '#1e3a8a' : '#1e3a8a');
                 svgContent += `
                     <g class="node-bag-pill-group" data-bagid="${bagsAtNode[0].bagId}" title="${bagListStr}">
-                        <rect class="node-bag-pill" x="${pos.x - 34}" y="${pos.y + 25}" width="68" height="17" fill="#1e3a8a"></rect>
+                        <rect class="node-bag-pill" x="${pos.x - 36}" y="${pos.y + 25}" width="72" height="17" rx="3" fill="${multiFill}"></rect>
                         <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34}">${bagsAtNode.length} Bags</text>
                     </g>
                 `;
