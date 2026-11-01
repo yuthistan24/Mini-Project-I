@@ -1,493 +1,319 @@
-# Vaanam Airport Intelligent Baggage Handling and Routing System
-**Second Project Review (Review 2) — College Mini-Project 10**
+# Vaanam Airport Baggage Handling and Routing System
 
-A compact, deterministic, and academically grounded airport baggage simulation for a fictional regional hub called **Vaanam Airport**. Implemented with a pure Java backend, persistent SQLite database via JDBC, and a student-built web interface using HTML, CSS, and Vanilla JavaScript. Baggage urgency is ranked with a small hand-written fuzzy inference system, and frequently read records can optionally be served through a Redis cache-aside layer without SQLite ever losing its role as the source of truth.
+An academic Java mini-project that models how airport baggage is registered, screened, prioritized, routed through conveyor segments, and tracked. The example airport is fictional. A Java HTTP server provides the backend and serves a plain HTML, CSS, and JavaScript interface. SQLite stores the project data; Redis is optional for selected read requests.
 
----
+> **Scope:** This is a local simulation for coursework and demonstration. Baggage movement is recorded through the interface. The project does not connect to airport equipment, live sensors, security scanners, airline systems, or external flight services, and it is not intended for production use.
 
-## 1. Problem Statement & Domain Context
+## Contents
 
-Manual baggage processing in regional airports causes serious operational bottlenecks:
+- [Project at a glance](#project-at-a-glance)
+- [Features](#features)
+- [How the system works](#how-the-system-works)
+- [Project structure](#project-structure)
+- [Requirements](#requirements)
+- [Build and run](#build-and-run)
+- [Accounts and first-run setup](#accounts-and-first-run-setup)
+- [Configuration](#configuration)
+- [Data and database](#data-and-database)
+- [HTTP API](#http-api)
+- [Verification](#verification)
+- [Known limits and data notes](#known-limits-and-data-notes)
+- [Troubleshooting](#troubleshooting)
 
-1. **Out-of-Order Waiting**: Bags for an imminent flight often wait behind bags for flights departing hours later because check-in queues do not prioritize by departure deadline.
-2. **Missed Onward Loading Windows**: Transfer and connecting baggage from arriving flights frequently miss tight connecting departure windows.
-3. **Conveyor Hardware Jams**: A mechanical breakdown along a critical conveyor belt interrupts planned routing, causing baggage piles without automated alternate-path recalculation.
-4. **Flight Gate & Bay Reassignments**: Gate changes or loading bay switches leave baggage moving toward obsolete positions unless routes dynamically update.
-5. **Security Clearance Violations**: Baggage without verified operator clearance must never enter conveyor dispatch to an aircraft.
-6. **Cutoff Violations**: Bags whose remaining transit time exceeds the flight's loading deadline must not be reported as loaded.
+## Project at a glance
 
-### Simulation Scope & Assumptions
-- **Academic Simulation**: This system is a deterministic college simulation demonstrating Java OOP, data structures, and algorithms. It does not claim to interface with physical hardware, live airport sensors, or external aviation APIs.
-- **Conveyor Network Topology**: 10–12 core conveyor nodes connected by directed weighted edges with positive transit times.
-- **Scheduled Flights**: 4 regional flights with distinct loading cutoffs and assigned aircraft loading bays.
-- **Dataset**: Coherent set of 32 synthetic baggage records across 12 passengers demonstrating all normal and failure scenarios.
-- **Two-Way Workflows**: Models Outgoing (Check-in → Bay), Incoming (Aircraft Unload → Baggage Claim Carousel), and Transfer (Transit Hub → Connecting Departure Bay).
+| Area | Implementation |
+|---|---|
+| Backend | Java and the JDK `HttpServer` module |
+| Frontend | HTML, CSS, and browser JavaScript; no frontend framework or package manager |
+| Persistent storage | SQLite through the bundled JDBC driver |
+| Routing | Directed, weighted conveyor graph and Dijkstra’s shortest-path algorithm |
+| Queue | Java `PriorityQueue` with a deterministic deadline-first comparator |
+| Optional cache | Redis cache-aside helper; the application still runs when Redis is unavailable |
+| Web address | `http://localhost:8080` |
+| Included database snapshot | 32 baggage records, 12 passengers, 4 flights, 4 bays, 16 conveyor segments, and 14 modeled nodes |
 
----
+## Features
 
-## 2. System Architecture & Compact File Structure
+- Register outgoing, incoming, and transfer baggage and associate it with passenger and flight records.
+- Record screening approval or rejection. Outgoing and transfer bags require a user with clearance authority before they can be advanced.
+- Order queued departure bags by earliest loading cutoff, with fixed tie-breakers. Fuzzy urgency is considered only after the cutoff, transfer type, and passenger category tie.
+- Find a minimum-time route through available directed conveyor segments using Dijkstra’s algorithm and a min-heap.
+- Compare a route estimate with the loading cutoff and mark a bag `MISSED_CUTOFF` when it cannot arrive in time.
+- Record baggage movement one conveyor node at a time. If a conveyor segment becomes unavailable, recalculate active routes from each bag’s current confirmed location.
+- Update flight loading bays and cutoffs. Pending baggage assigned to an updated flight is recalculated where applicable.
+- Track a bag by tag or view the signed-in passenger’s own bags. Staff can view the all-bag manifest and a conveyor graph. The browser refreshes tracking data from the API every 2.5 seconds; it does not receive live sensor events.
+- Manage passenger, flight, bay, user, and audit records through role-specific screens.
+- Calculate a small rule-based urgency score from remaining cutoff time, estimated route time, transfer urgency, and simulated waiting time. The score is supporting information and never overrides an earlier cutoff.
+- Optionally cache selected baggage tracking, flight, bay, and conveyor responses in Redis. SQLite remains the persistent record.
 
-The backend keeps the original **five core Java classes** and adds two small, focused helpers for the new features, while the frontend remains **3 files**:
+## How the system works
 
-```
+### Main workflow
+
+1. A staff member registers a bag or selects an existing bag and assigns a flight when needed.
+2. A clearance-authorized operator approves or rejects screening for an outgoing or transfer bag.
+3. The service orders eligible queued bags using the priority rules below.
+4. The route planner finds the shortest available path to the assigned bay or claim carousel.
+5. The service checks the estimated route time against the applicable loading cutoff.
+6. A staff member records each movement step. The saved location, status, route, and history are then visible in the tracking screens.
+7. If a conveyor or flight-bay assignment changes, the service recalculates affected routes from the bag’s current confirmed location.
+
+### Queue ordering
+
+The comparator applies these keys in order:
+
+1. Earliest loading cutoff.
+2. Transfer baggage before origin baggage when cutoffs tie.
+3. Passenger category: First Class, Business, then Economy.
+4. Higher fuzzy urgency score, only after the earlier keys tie.
+5. Earlier arrival order.
+6. Baggage ID in lexical order.
+
+The cutoff is always the primary key. Incoming bags and bags without a departure cutoff are not eligible for the departure urgency score.
+
+### Conveyor routing
+
+The conveyor network is a directed graph: an edge from one node to another does not imply a reverse edge. Each edge has a positive travel-time weight and an availability state. Dijkstra’s algorithm ignores unavailable edges and reports no route when the destination cannot be reached. The included example models 14 nodes, including check-in, sorting, transfer hubs, central routing, loading bays, unload, and claim carousels.
+
+### Roles and access
+
+| Role | Typical access |
+|---|---|
+| `ADMIN` | Manage accounts and system records, update flights and bays, inspect audit logs, and perform a confirmed clean reset. Admin status alone does not grant baggage-clearance authority. |
+| `BAGGAGE_MANAGER` | Register and process baggage, manage passengers, update flights, advance the simulated clock, and change conveyor availability. Clearance decisions also require the separate clearance-authority flag. |
+| `PASSENGER` | View and track baggage linked to that passenger account. The Java backend checks ownership for individual tracking requests. |
+
+Passwords are stored as PBKDF2-HMAC-SHA256 hashes with random salts. Sessions are kept in memory and use an `HttpOnly` cookie. Sessions are cleared when the server process stops.
+
+### Fuzzy urgency
+
+`FuzzyUrgency.java` maps four values to LOW, MEDIUM, and HIGH memberships, evaluates a fixed rule set, and returns a 0–100 score and label. The inputs are minutes to cutoff, estimated route time, transfer urgency, and time spent waiting in the simulation. The score is recalculated when relevant baggage, route, flight, or simulated-time data changes. It is a small hand-written rule system, not a trained model.
+
+### Redis cache
+
+Redis is an optional cache-aside layer. The default key prefix is `vaanam:` and the default expiry is 45 seconds. Selected tracking, flight, bay, and conveyor reads can return an `X-Cache: HIT` or `X-Cache: MISS` response header. The application writes SQLite first and invalidates related cache entries after supported updates. If Redis is stopped or unreachable, the application falls back to its normal data path; Redis is not required to start the server.
+
+## Project structure
+
+```text
 Mini-Project-I/
 ├── src/
-│   ├── Main.java             # Entry point, HTTP server initialization, REST handlers & JSON parser
-│   ├── Models.java           # Consolidated domain models: Baggage, Flight, Bay, Conveyor, User, Passenger
-│   ├── DatabaseManager.java  # SQLite persistence via JDBC, schema initialization, audit logging
-│   ├── BaggageService.java   # PriorityQueue comparator, Dijkstra graph routing, clock, cutoff checks
-│   ├── Auth.java             # PBKDF2 password hashing, session tokens, role permissions, passenger privacy
-│   ├── FuzzyUrgency.java     # Hand-written fuzzy urgency scoring (no external library)
-│   ├── RedisCache.java       # Optional Redis cache-aside layer with SQLite fallback
-│   └── TestRunner.java       # Standalone automated verification suite (19 test suites, 76 assertions)
+│   ├── Main.java             # HTTP server, static files, and API handlers
+│   ├── Models.java           # Roles, baggage, passenger, flight, bay, and graph models
+│   ├── Auth.java             # Password hashing, sessions, and permission checks
+│   ├── BaggageService.java   # Baggage workflow, queue, simulation, and routing planner
+│   ├── DatabaseManager.java  # SQLite schema, loading, saving, and audit records
+│   ├── FuzzyUrgency.java     # Rule-based urgency score
+│   ├── RedisCache.java       # Optional Redis client and cache operations
+│   └── TestRunner.java       # Standalone verification runner
 ├── web/
-│   ├── index.html            # Clean student-built UI, tables, modals, route tracking
-│   ├── style.css             # Light grey background, restrained navy accents, functional tables
-│   └── app.js                # Vanilla JavaScript state management and backend REST integration
-├── lib/
-│   ├── sqlite-jdbc.jar       # SQLite JDBC Driver
-│   ├── slf4j-api.jar         # Logging API
-│   └── slf4j-simple.jar      # Simple logger implementation
+│   ├── index.html            # Login and role-based application screens
+│   ├── style.css             # Interface styling
+│   └── app.js                # Browser behavior and API requests
+├── lib/                      # SQLite JDBC and SLF4J JAR files
 ├── data/
-│   ├── airport.db            # Persistent SQLite database
-│   └── test_airport.db       # Isolated database recreated by TestRunner
-└── README.md                 # Project documentation and review report
+│   ├── airport.db            # Included SQLite database snapshot
+│   └── airport.db.*          # Backup snapshots supplied with the repository
+├── bin/                      # Local Java compiler output; ignored by Git
+└── README.md
 ```
 
-### Main Java Components Overview
+## Requirements
 
-| File | Responsibilities |
-|---|---|
-| [`src/Main.java`](file:///c:/Users/yuthg/Mini-Project-I/src/Main.java) | Application startup on port 8080 using `com.sun.net.httpserver.HttpServer`. Serves static files from `web/` and routes REST endpoints (`/api/login`, `/api/baggage`, `/api/flights`, `/api/conveyors`, `/api/users`, `/api/audit`, etc.). |
-| [`src/Models.java`](file:///c:/Users/yuthg/Mini-Project-I/src/Models.java) | Domain classes: `Role`, `PassengerCategory`, `BaggageDirection`, `BaggageStatus`, `User`, `Passenger`, `Baggage` (`OriginBag`, `TransferBag`, `IncomingBag`), `LoadingBay`, `Flight`, `ConveyorSegment`, `DijkstraNode`, `RoutingResult`. |
-| [`src/DatabaseManager.java`](file:///c:/Users/yuthg/Mini-Project-I/src/DatabaseManager.java) | SQLite JDBC integration with prepared statements. Manages schemas (`Users`, `Passenger`, `Flight`, `LoadingBay`, `ConveyorSegment`, `Baggage`, `RoutingRecord`, `AuditLog`), transactions, and configurable database URL for test isolation. |
-| [`src/BaggageService.java`](file:///c:/Users/yuthg/Mini-Project-I/src/BaggageService.java) | Core algorithms: deterministic `PriorityQueue` with tie-breaking comparator, `ConveyorRoutePlanner` implementing Dijkstra's algorithm, conveyor toggle & failure rerouting, simulated clock, and 32-record synthetic dataset. |
-| [`src/Auth.java`](file:///c:/Users/yuthg/Mini-Project-I/src/Auth.java) | Cryptographic PBKDF2WithHmacSHA256 password hashing (10,000 iterations, 16-byte random salt), session tokens, certified clearance authority checks, and server-side passenger privacy enforcement. |
-| [`src/FuzzyUrgency.java`](file:///c:/Users/yuthg/Mini-Project-I/src/FuzzyUrgency.java) | Maps four crisp inputs to LOW/MEDIUM/HIGH fuzzy memberships, applies a compact rule base, and returns a deterministic 0–100 urgency score with the winning rule description. |
-| [`src/RedisCache.java`](file:///c:/Users/yuthg/Mini-Project-I/src/RedisCache.java) | Minimal RESP client over `Socket` implementing cache-aside `GET`/`SETEX`/`DEL`, short TTLs, hit/miss statistics, targeted invalidation, and silent fallback when Redis is unavailable. |
-| [`src/TestRunner.java`](file:///c:/Users/yuthg/Mini-Project-I/src/TestRunner.java) | Standalone verification runner testing all 19 evaluation suites using isolated test database `data/test_airport.db`; suite 19 starts an in-process mock Redis server. |
+- JDK 17 or newer.
+- A modern browser.
+- Redis only if you want to demonstrate cache hits; it is optional.
 
----
+The SQLite JDBC and SLF4J dependencies are already in `lib/`. No Maven, Gradle, Node.js, or Docker setup is required.
 
-## 3. Core Data Structures & Algorithms
+## Build and run
 
-### 3.1 Directed Weighted Graph (Conveyor Network)
-The airport conveyor network is modeled as a directed graph $G = (V, E)$, where $V$ represents processing and transfer checkpoints, and $E$ represents directed conveyor belts with positive transit times (weights in minutes).
+Run all commands from the repository root so the application can find `web/`, `lib/`, and `data/` by their relative paths.
 
-- **14 Nodes**: `CHECK-IN`, `SORTING`, `TRANSFER-A`, `TRANSFER-B`, `CENTRAL`, `BAY-AREA`, `BAY-A`, `BAY-B`, `BAY-C`, `BAY-D`, `UNLOAD-POINT`, `CLAIM-AREA`, `CLAIM-CAROUSEL-1`, `CLAIM-CAROUSEL-2`.
-- **Adjacency Representation**: Implemented as `HashMap<String, ArrayList<ConveyorSegment>>`.
+### Windows PowerShell
 
-### 3.2 Dijkstra's Shortest Path Algorithm
-The routing planner finds the minimum transit-time path from the bag's current conveyor position to its destination loading bay or carousel:
-1. Initializes distances to $\infty$, start node to $0$.
-2. Uses a min-priority queue (`PriorityQueue<DijkstraNode>`).
-3. **Hardware Jam Exclusion**: Skips any edge where `edge.isAvailable() == false`.
-4. Reconstructs the optimal route by tracking predecessors (`predecessors.get(curr)`).
-5. **Dynamic Rerouting**: When a conveyor segment fails, the system automatically recalculates the route from the bag's *last confirmed node*. If no path exists, the bag is flagged with status `EXCEPTION` and transit time `-1`.
-
-### 3.3 PriorityQueue for Deadline-Based Processing
-Eligible baggage awaiting dispatch is processed using a custom `Comparator<Baggage>` enforcing the exact hierarchy:
-1. **Earliest Flight Loading Cutoff**: The bag with the smallest departure deadline cutoff is prioritized first. This is always the primary key and is never overridden by fuzzy urgency.
-2. **Transfer Urgency**: Transfer baggage takes precedence over origin baggage when cutoffs are equal.
-3. **Passenger Category Rank**: Rank 1 (`FIRST_CLASS`) > Rank 2 (`BUSINESS`) > Rank 3 (`ECONOMY`).
-4. **Fuzzy Urgency Score**: Higher urgency score first, consulted **only** after cutoff, transfer type, and passenger category have tied.
-5. **Arrival Order**: Earlier baggage check-in sequence number is processed first.
-6. **Baggage ID**: Lexicographical tie-breaker (`b1.getBagId().compareTo(b2.getBagId())`) ensuring completely deterministic ordering.
-
-The fuzzy score therefore refines ordering inside an existing priority band; it can never move a later-cutoff bag ahead of a bag with an earlier loading cutoff.
-
-### 3.4 Fuzzy Logic Urgency Scoring
-[`FuzzyUrgency.java`](file:///c:/Users/yuthg/Mini-Project-I/src/FuzzyUrgency.java) implements a small, hand-written fuzzy inference system (no external fuzzy library):
-
-| Input | Crisp value | LOW membership | MEDIUM membership | HIGH membership |
-|---|---|---|---|---|
-| Remaining time to loading cutoff | `cutoff − simulatedTime` minutes | falls from 1 at 30m to 0 at 60m | triangle 30m–60m–90m | rises from 0 at 60m to 1 at 90m |
-| Travel time to bay | Dijkstra ETA minutes | falls from 1 at 10m to 0 at 20m | triangle 10m–20m–30m | rises from 0 at 20m to 1 at 30m |
-| Transfer urgency | 90 for transfer bags, 35 for origin bags | falls from 1 at 25 to 0 at 50 | — | rises from 0 at 50 to 1 at 75 |
-| Processing / waiting delay | `simulatedTime − queuedSince` minutes | falls from 1 at 10m to 0 at 25m | triangle 10m–25m–40m | rises from 0 at 25m to 1 at 40m |
-
-A compact rule base covers critical combinations (e.g. *remaining time LOW and travel time HIGH → CRITICAL*, score 95), high combinations (e.g. *remaining time LOW → HIGH*, score 70), medium combinations (e.g. *transfer urgency HIGH → MEDIUM*, score 55), and low combinations (e.g. *remaining time HIGH and travel time LOW → LOW*, score 15). The strongest rule is selected, then blended toward the neutral score 50 according to its firing strength so partial memberships produce smooth intermediate scores. Labels are `CRITICAL` (85–100), `HIGH` (65–84), `MEDIUM` (35–64), and `LOW` (0–34).
-
-- **Eligibility**: Incoming baggage, baggage without a loading cutoff, and terminal statuses (`LOADED`, `COLLECTED`, `MISSED_CUTOFF`, `REJECTED`) receive an ineligible result and display `—`.
-- **Determinism**: Scores are calculated only from stored state and the simulated clock. No randomness is used.
-- **Refresh triggers**: Urgencies are recalculated and the `PriorityQueue` rebuilt after simulated-time changes, baggage registration, flight assignment, clearance decisions, processing steps, collection, and flight/bay/cutoff or conveyor changes. `queuedSince` is persisted in SQLite so the waiting-delay input survives restarts.
-- **Transparency**: The winning rule and all four input values are returned in the API and shown in the baggage table, tracking modal, and live inspector. Ineligible bags display `—`.
-
-### 3.5 Optional Redis Cache-Aside Layer
-[`RedisCache.java`](file:///c:/Users/yuthg/Mini-Project-I/src/RedisCache.java) is a deliberately small cache layer, not a replacement database:
-
-- **Cached data**: individual baggage tracking payloads (`baggage:track:<bagId>`), flight details together with their loading-bay assignments (`flights:all`, `bays:all`), and conveyor network data (`conveyors:all`). Every Redis key is prefixed with `vaanam:`.
-- **Write path**: SQLite is committed first. Only after a successful write does the service invalidate the affected cache entry (or entries), so cached data is always derived from already-committed SQLite state.
-- **Invalidation**: Baggage saves invalidate that bag's tracking key; flight/bay changes invalidate flights and bays; conveyor changes invalidate conveyors and all baggage tracks; simulated-clock changes and full resets invalidate all baggage tracks. Repair/sync operations invalidate all derived data.
-- **TTL**: `SETEX` with a 45-second default (set `REDIS_TTL` to 30–60) means even a missed invalidation expires quickly.
-- **Failure behaviour**: Connect and read timeouts are 500 ms. On connection failure the cache marks itself unavailable, retries after a 2-second backoff, and silently falls back to SQLite/in-memory data. The application starts and runs normally with Redis stopped.
-- **Observability**: Cached responses include an `X-Cache: HIT` or `X-Cache: MISS` header, and `GET /api/cache` returns hit/miss/error/invalidation counters plus TTL and endpoint information.
-
-### 3.6 HashMap & ArrayDeque
-- **`HashMap`**: Provides $O(1)$ lookup for baggage by ID, flight by flight number, passenger by passenger ID, and loading bay by bay ID.
-- **`ArrayDeque`**: Represents the FIFO queue for physical conveyor entry points before routing.
-
----
-
-## 4. Role-Based Access Control (RBAC) & Privacy
-
-The system implements 3 primary user-facing roles enforced entirely in Java backend logic (`Auth.java` and `Main.java`):
-
-| Role | Permitted Actions | Restrictions |
-|---|---|---|
-| **ADMIN** | System setup, create staff accounts, reset passwords, activate/deactivate accounts, view all manifest data, flight/bay reassignment, audit logs, clean data reset. | **Cannot** grant security clearance merely by virtue of admin role (requires explicit certified clearance authority). |
-| **BAGGAGE_MANAGER** | Register baggage, assign flights, step and run conveyor simulation, view clearance queue, grant/reject clearance (with authority), toggle conveyor segments offline/online to test rerouting. | **Cannot** create admin accounts, alter user roles, or bypass cutoff and screening validation. |
-| **PASSENGER** | Log in, search by tag, view strictly their own checked bags, inspect live conveyor checkpoints and dynamic ETA. | **Cannot** access another passenger's records (rejected with 403 Forbidden). Cannot access staff endpoints or alter flights/conveyors. |
-
-### Password Security & Session Management
-- **PBKDF2**: Passwords are never stored in plaintext. They are hashed using `PBKDF2WithHmacSHA256` with a unique 16-byte cryptographically secure random salt and 10,000 iterations.
-- **Server-Managed Sessions**: Authenticated requests exchange a session cookie mapped to a server-side `User` object. Role claims from the browser are never trusted.
-
----
-
-## 5. Workflows: Outgoing, Incoming, and Transfer
-
-```mermaid
-graph TD
-    subgraph Outgoing Baggage Workflow
-        A1[Check-in: REGISTERED] --> A2{Security Screening}
-        A2 -- Pass --> A3[Status: QUEUED in PriorityQueue]
-        A2 -- Prohibited Item --> A4[Status: REJECTED]
-        A3 --> A5[Conveyor Transit: IN_TRANSIT]
-        A5 --> A6{At Loading Bay: Check Cutoff}
-        A6 -- ETA <= Cutoff --> A7[Status: LOADED]
-        A6 -- ETA > Cutoff --> A8[Status: MISSED_CUTOFF]
-    end
-
-    subgraph Incoming Baggage Workflow
-        B1[Aircraft Arrival: UNLOAD-POINT] --> B2[Inbound Conveyor Transit]
-        B2 --> B3[Status: AT_COLLECTION_POINT]
-        B3 --> B4[Claim Carousel: COLLECTED]
-    end
-
-    subgraph Transfer Baggage Workflow
-        C1[Transit Inbound Hub: TRANSFER-A] --> C2[Transfer Security Verification]
-        C2 --> C3[Dijkstra Route to Connecting Bay]
-        C3 --> C4[Validated Onward Cutoff -> LOADED]
-    end
-```
-
----
-
-## 6. Synthetic Demonstration Dataset
-
-The system includes a pre-seeded, consistent dataset of **32 synthetic baggage records**, **4 flights**, and **12 passengers**:
-
-### Flights
-| Flight | Origin | Destination | Departure | Loading Cutoff | Assigned Bay |
-|---|---|---|---|---|---|
-| **AI101** | MAA | Delhi (DEL) | 11:00 AM (660m) | 10:30 AM (630m) | BAY-A |
-| **6E202** | MAA | Mumbai (BOM) | 10:45 AM (645m) | 10:15 AM (615m) | BAY-B |
-| **SG303** | MAA | Bengaluru (BLR) | 11:15 AM (675m) | 10:45 AM (645m) | BAY-C |
-| **UK404** | MAA | Dubai (DXB) | 10:50 AM (650m) | 10:20 AM (620m) | BAY-D |
-
-### Sample Baggage Scenarios
-- **Multi-Bag Passengers**:
-  - `P101` (Ramesh Kumar): 4 bags (`BAG-101` awaiting clearance, `BAG-102` queued, `BAG-122` loaded at Bay A, `BAG-131` in transit).
-  - `P102` (Priya Sharma): 3 bags (`BAG-103` in transit, `BAG-104` loaded at Bay B, `BAG-123` queued).
-  - `P108` (Sneha Reddy): 3 bags (`BAG-110` queued, `BAG-111` loaded at Bay D, `BAG-126` in transit).
-- **Incoming Arrivals**: `BAG-114`, `BAG-116`, `BAG-117`, `BAG-119`, `BAG-129` routed to claim carousels.
-- **Transfer Connections**: `BAG-115`, `BAG-118`, `BAG-130` connecting through transit hubs to onward departure bays.
-- **Missed Cutoff Demonstration**: `BAG-120` (Rajesh Patel) arrives after the flight cutoff and is flagged `MISSED_CUTOFF`.
-- **Screening Rejection**: `BAG-121` flagged `REJECTED` due to prohibited lithium battery pack detected during screening.
-
----
-
-## 7. Database Schema (SQLite JDBC)
-
-Persisted in [`data/airport.db`](file:///c:/Users/yuthg/Mini-Project-I/data/airport.db):
-
-```mermaid
-erDiagram
-    USERS {
-        string username PK
-        string passwordHash
-        string passwordSalt
-        string role
-        int clearanceAuthority
-        int active
-        string linkedPassengerId
-    }
-    PASSENGER {
-        string passengerId PK
-        string fullName
-        string username
-        string flightId
-        string category
-        string contact
-    }
-    BAGGAGE {
-        string bagId PK
-        string passengerId FK
-        string passengerName
-        string bagType
-        string direction
-        string flightId FK
-        int categoryRank
-        int arrivalOrder
-        string currentLocation
-        string destinationNode
-        int loadingCutoff
-        int operatorClearance
-        string clearanceReason
-        string status
-        int estimatedTime
-        int queuedSince
-        string originAirport
-        string destinationAirport
-    }
-    FLIGHT {
-        string flightId PK
-        string origin
-        string destination
-        int departureTime
-        int loadingCutoff
-        string assignedBay FK
-    }
-    LOADING_BAY {
-        string bayId PK
-        string assignedFlightId
-    }
-    CONVEYOR_SEGMENT {
-        string fromNode PK
-        string toNode PK
-        int processingTime
-        int available
-    }
-    AUDIT_LOG {
-        int logId PK
-        string timestamp
-        string actor
-        string actionType
-        string targetRecord
-        int simulatedTime
-        string status
-        string details
-    }
-
-    USERS ||--o| PASSENGER : links
-    PASSENGER ||--o{ BAGGAGE : owns
-    FLIGHT ||--o{ BAGGAGE : carries
-    FLIGHT ||--o| LOADING_BAY : occupies
-```
-
-`queuedSince` stores the simulated minute when a bag entered processing/waiting. It is added automatically to existing databases with `ALTER TABLE ... ADD COLUMN` during schema initialization, so the original `airport.db` can be upgraded in place without losing records.
-
----
-
-## 8. Verification & Test Suite Results
-
-The automated test runner (`TestRunner.java`) tests all core requirements across 19 test suites using an isolated test database (`data/test_airport.db`). Suite 19 starts a lightweight in-process mock RESP server so cache hits, invalidation, and fallback can be verified even when no Redis installation is available.
-
-### Verification Test Summary
-```
-=======================================================
-   VAANAM AIRPORT BAGGAGE SYSTEM - VERIFICATION TEST   
-=======================================================
-
-[Test Suite 1] Initial Administrator Setup and Login
-  [PASS] Default admin user exists
-  [PASS] Admin account has ADMIN role
-  [PASS] Admin authenticates successfully with correct PBKDF2 password
-  [PASS] Admin login rejected with incorrect password
-
-[Test Suite 2] Administrator Account Creation
-  [PASS] Admin-created staff account saved in database
-  [PASS] Role correctly assigned as BAGGAGE_MANAGER
-  [PASS] Clearance authority flag properly stored
-
-[Test Suite 3] Baggage Manager Login and Operations
-  [PASS] Manager user exists
-  [PASS] Manager has BAGGAGE_MANAGER role
-  [PASS] Manager possesses BAGGAGE_MANAGER permission
-  [PASS] Baggage Manager successfully registered baggage record
-
-[Test Suite 4] Passenger Login and Access to Own Baggage
-  [PASS] Passenger account 'ramesh' exists
-  [PASS] Role is PASSENGER
-  [PASS] Account linked to Passenger ID P101
-  [PASS] Passenger P101 can retrieve their baggage
-  [PASS] All retrieved bags belong strictly to passenger P101
-
-[Test Suite 5] Rejection of Access to Other Passengers' Records
-  [PASS] Java backend strictly rejects passenger attempting to access another passenger's records
-
-[Test Suite 6] Baggage Registration with Passenger & Flight
-  [PASS] Baggage record contains valid Passenger ID
-  [PASS] Baggage record contains correct passenger name
-  [PASS] Baggage linked to validated flight UK404
-  [PASS] Destination node resolves to flight loading bay BAY-D
-
-[Test Suite 7] Tracking by Baggage ID
-  [PASS] Baggage BAG-101 found by ID
-  [PASS] Current location is confirmed (CHECK-IN)
-  [PASS] Valid status reported (AWAITING_CLEARANCE)
-
-[Test Suite 8] Multiple Bags Belonging to One Passenger
-  [PASS] Passenger P102 has multiple associated bags (3 bags)
-  [PASS] Passenger P101 has multiple associated bags (5 bags)
-
-[Test Suite 9] Incoming, Outgoing, and Transfer Workflows
-  [PASS] Outgoing workflow baggage identified
-  [PASS] Incoming workflow baggage identified
-  [PASS] Transfer workflow baggage identified
-  [PASS] Incoming bag originates at UNLOAD-POINT
-  [PASS] Incoming bag routes to Claim Carousel
-  [PASS] Transfer bag originates at TRANSFER-A
-
-[Test Suite 10] Dijkstra Route Calculation and ETA
-  [PASS] Shortest path calculated successfully
-  [PASS] Optimal shortest route processing time is 19 minutes
-  [PASS] Route traverses from CHECK-IN to BAY-A
-
-[Test Suite 11] Conveyor Failure and Dynamic Rerouting
-  [PASS] Dijkstra finds alternate path via transfer hub
-  [PASS] Rerouted processing time is 21 minutes
-  [PASS] Rerouted path avoids failed segment and utilizes transit bypass
-  [PASS] Route restores to optimal 19 minutes when segment comes online
-
-[Test Suite 12] Loading Cutoff Validation
-  [PASS] On-time baggage transitions to LOADED
-  [PASS] Late baggage flagged MISSED_CUTOFF and prevented from loading
-
-[Test Suite 13] Database Persistence Across Restarts
-  [PASS] Baggage record persisted in SQLite and reloaded upon restart
-  [PASS] Passenger relationship persisted
-  [PASS] Passenger name persisted
-
-[Test Suite 14] Role Restrictions and Clearance Authority
-  [PASS] Passenger prohibited from processing baggage
-  [PASS] Admin without certified clearance authority cannot grant security clearance
-  [PASS] Certified Baggage Manager successfully grants clearance
-
-[Test Suite 15] Duplicate ID Rejection and Audit Logging
-  [PASS] Duplicate Baggage ID rejected with exception
-  [PASS] Audit log contains persisted operational records (12 logs)
-
-[Test Suite 16] Sample Data Consistency Verification
-  [PASS] Sample dataset contains at least 30 synthetic baggage records (36 records)
-  [PASS] Every sample baggage record contains valid passenger, location, and status attributes
-
-[Test Suite 17] Fuzzy Logic Urgency Scoring
-  [PASS] Outgoing baggage with a cutoff is urgency-eligible
-  [PASS] Low remaining time + high travel time -> CRITICAL urgency (95)
-  [PASS] High remaining time + low travel time -> LOW urgency (32)
-  [PASS] Urgency does not decrease when the remaining cutoff time increases
-  [PASS] Urgency does not decrease when travel time increases
-  [PASS] High transfer urgency raises the score above an equivalent outgoing bag (80 > 55)
-  [PASS] A longer processing/waiting delay raises urgency (55 > 48)
-  [PASS] Incoming baggage is not eligible for departure-cutoff urgency
-
-[Test Suite 18] Earliest Loading Cutoff Remains Primary Priority
-  [PASS] Test setup produces a lower fuzzy score for the earliest-cutoff bag
-  [PASS] Earliest loading cutoff remains first even when fuzzy urgency is lower
-  [PASS] Within later cutoffs, the higher fuzzy urgency bag is dispatched next
-
-[Test Suite 19] Redis Cache-Aside, Invalidation and Fallback
-  [PASS] Redis TTL is a short 30-60 second fallback (45s)
-  [PASS] First baggage tracking request is a cache miss
-  [PASS] Second baggage tracking request is a cache hit
-  [PASS] Cache hit avoided a second database/data load
-  [PASS] Redis hit counter records the served cached record
-  [PASS] Old baggage position was cached before the update
-  [PASS] Baggage position updated through the simulated conveyor step
-  [PASS] Cache invalidation prevents an old baggage position from being displayed
-  [PASS] Flight details are served from Redis on a hit
-  [PASS] Flight changes invalidate cached flight details
-  [PASS] Conveyor network information is served from Redis on a hit
-  [PASS] Conveyor availability changes invalidate cached network information
-  [PASS] Passenger tracking reflects the updated position after a SQLite reload
-  [PASS] Application continues with the SQLite fallback when Redis is unavailable
-
-=======================================================
-FINAL VERIFICATION RESULTS: 76 Passed, 0 Failed.
-=======================================================
-```
-
----
-
-## 9. Setup & Run Instructions
-
-### Prerequisites
-- Java Development Kit (JDK 17 or higher, tested with JDK 25)
-- Windows PowerShell, macOS Terminal, or Linux Shell
-
-### 1. Compile the Java Source Files
 ```powershell
-javac -d bin -cp "lib/*" src/*.java
-```
-
-### 2. Run the Automated Verification Test Suite
-```powershell
-java -cp "bin;lib/*" TestRunner
-```
-
-### 3. Start the Application Server
-```powershell
+New-Item -ItemType Directory -Force bin | Out-Null
+$javaSources = Get-ChildItem src -Filter *.java | ForEach-Object FullName
+javac -cp "lib/*" -d bin $javaSources
 java -cp "bin;lib/*" Main
 ```
 
-### 4. Optional: Run Redis for Cache Hits
-Redis is **optional**. If `redis-server` is not installed or the daemon is stopped, the application logs a single fallback message and serves everything from SQLite/in-memory state. To enable the cache-aside layer, start Redis locally on the default port before launching the application:
+### macOS or Linux
+
+```sh
+mkdir -p bin
+javac -cp 'lib/*' -d bin src/*.java
+java -cp 'bin:lib/*' Main
+```
+
+When the server starts, open [http://localhost:8080](http://localhost:8080). Stop it with `Ctrl+C` in the terminal. The port is currently fixed at `8080` in `src/Main.java`.
+
+### Run the verification suite
+
+Compile the project first, then use the platform-specific classpath separator:
 
 ```powershell
+# Windows PowerShell
+java -cp "bin;lib/*" TestRunner
+```
+
+```sh
+# macOS or Linux
+java -cp 'bin:lib/*' TestRunner
+```
+
+`TestRunner` runs 19 suites covering authentication, role access, baggage workflows, routing, cutoffs, persistence, fuzzy priority, and Redis behavior. It deletes `data/test_airport.db` before and after the run; do not store unrelated data at that path.
+
+## Accounts and first-run setup
+
+The included `data/airport.db` snapshot contains local demonstration accounts. These credentials are for local coursework evaluation only:
+
+| Role | Username | Password |
+|---|---|---|
+| Administrator | `admin` | `admin123` |
+| Baggage manager | `manager` | `manager123` |
+| Passenger | `ramesh` | `pass123` |
+| Passenger | `priya` | `pass123` |
+
+Change or remove demonstration credentials before sharing a deployment, and do not expose this HTTP server to an untrusted network. The application is not designed as a production authentication service.
+
+If using a database with no active administrator, the Account Setup Portal can create the first admin account. The server forces the first account to the `ADMIN` role and does not grant clearance authority automatically. After an administrator exists, only an admin can provision accounts. Passenger accounts should be linked to the appropriate passenger record.
+
+## Configuration
+
+The only optional runtime configuration is for Redis:
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `REDIS_HOST` | `127.0.0.1` | Redis host name or address |
+| `REDIS_PORT` | `6379` | Redis port |
+| `REDIS_PASSWORD` | Empty | Password for Redis `AUTH`, when required |
+| `REDIS_TTL` | `45` | Cache expiry in seconds |
+
+To use Redis, start it in another terminal before launching the Java server:
+
+```sh
 redis-server --port 6379
 ```
 
-Configuration is read from environment variables (all optional):
+The application reads Redis settings from environment variables at startup. If Redis is unavailable, tracking and other application functions continue without the cache.
 
-| Variable | Default | Purpose |
+## Data and database
+
+`DatabaseManager.java` stores the project data in `data/airport.db` by default. The path is relative to the current working directory. Database initialization creates the project tables and adds selected missing columns when older database files are opened.
+
+| Table | Purpose |
+|---|---|
+| `Users` | Login hashes, roles, active state, and clearance authority |
+| `Passenger` | Passenger identity and account association |
+| `Flight` | Origin, destination, departure, cutoff, and assigned bay |
+| `LoadingBay` | Bay-to-flight assignment |
+| `ConveyorSegment` | Directed edge, travel time, and availability |
+| `Baggage` | Passenger/flight link, direction, location, status, clearance, and estimate |
+| `RoutingRecord` | Recorded movement and route history |
+| `AuditLog` | Selected account and operational actions |
+
+The simulation clock starts at 09:00 when the server process starts and advances through staff actions. Baggage, flight, passenger, conveyor, routing, and audit records are stored in SQLite. Make a copy of `data/airport.db` before experimenting with the application. The administrator’s **Clean Reset** action clears the database and reseeds the demonstration records; it also removes user accounts, so the first-admin setup must be completed again afterward.
+
+## HTTP API
+
+The browser uses JSON request and response bodies and a `session_id` cookie. Except for login, first-admin registration, static files, and the read-only simulated-time endpoint, API calls require an active session. Passengers are restricted to their own baggage by server-side checks.
+
+### Authentication and overview
+
+| Method and path | Access | Purpose / request fields |
 |---|---|---|
-| `REDIS_HOST` | `127.0.0.1` | Redis host |
-| `REDIS_PORT` | `6379` | Redis port |
-| `REDIS_PASSWORD` | *(empty)* | Password sent with `AUTH` when non-empty |
-| `REDIS_TTL` | `45` | Cache TTL in seconds (use 30–60) |
+| `POST /api/login` | Public | Log in with `username`, `password`; sets the session cookie. |
+| `POST /api/logout` | Session | End the current session. |
+| `GET /api/session` | Session | Return the signed-in account and role. |
+| `POST /api/register` | First admin, then admin only | Create an account with `username`, `password`, `role`, optional `clearanceAuthority`, and optional `linkedPassengerId`. |
+| `GET /api/stats` | Session | Dashboard counts and current summary. |
+| `GET /api/time` | Public | Read the simulated time. |
+| `POST /api/time/advance` | Admin or baggage manager | Advance the simulation; body: `minutes`. |
 
-Verify cache behaviour by repeating a track/flights/bays/conveyors request and checking the `X-Cache` response header, or inspect `GET /api/cache` as an administrator. No Docker configuration is required for this project; a local Redis installation is sufficient.
+### Baggage, passengers, and tracking
 
-### 5. Open in Web Browser
-Navigate to:
+| Method and path | Access | Purpose / request fields |
+|---|---|---|
+| `GET /api/baggage` | Session | List baggage. Optional query parameters: `q`, `direction`, `status`. Passenger accounts receive only their own records. |
+| `POST /api/baggage/register` | Admin or baggage manager | Register a bag. Fields: `bagId`, `passengerId`, `passengerName`, `direction`, `categoryRank`, `flightId`, `originAirport`, `destinationAirport`, `destinationNode`. |
+| `POST /api/baggage/assign` | Admin or baggage manager | Assign a bag to a flight: `bagId`, `flightId`. |
+| `POST /api/baggage/clearance` | Clearance-authorized user | Approve or reject screening: `bagId`, `approved`, optional `reason`. |
+| `POST /api/baggage/process` | Admin or baggage manager | Process the next queued bag; optionally pass `bagId` to process a specific bag. |
+| `POST /api/baggage/step` | Admin or baggage manager | Advance a bag by one route step: `bagId`. |
+| `POST /api/baggage/collect` | Session, ownership/role checks apply | Record collection: `bagId`. |
+| `GET /api/baggage/track?id={bagId}` | Session | Return one bag’s status, route, estimate, and movement history. Passengers can track only their own bags. |
+| `GET /api/tracking/live` | Session | Return the caller’s baggage (all baggage for staff), conveyor segments, and simulated time. |
+| `GET /api/passengers` | Admin or baggage manager | List passenger records. |
+| `POST /api/passengers` | Admin or baggage manager | Save a passenger: `passengerId`, `fullName`, optional `username`, `flightId`, `categoryRank`, and `contactInfo`. |
+
+Directions are `OUTGOING`, `INCOMING`, or `TRANSFER`. Passenger category ranks are `1` for First Class, `2` for Business, and `3` for Economy.
+
+### Flights, conveyors, and administration
+
+| Method and path | Access | Purpose / request fields |
+|---|---|---|
+| `GET /api/flights` | Session | List flights and assigned bays. |
+| `POST /api/flights/update` | Admin or baggage manager | Update a flight’s `assignedBay` and/or `cutoff`; body also includes `flightId`. |
+| `GET /api/bays` | Session | List loading bays and assignments. |
+| `GET /api/conveyors` | Session | List directed conveyor segments and availability. |
+| `POST /api/conveyors/toggle` | Admin or baggage manager | Change a segment’s availability: `fromNode`, `toNode`, `available`. |
+| `GET /api/users` | Admin | List user accounts and roles. |
+| `POST /api/users/update` | Admin | Update a user using `username`, `action` (`status`, `role`, `clearance`, or `password`), and `value`. |
+| `GET /api/audit` | Admin | Read audit events. |
+| `GET /api/cache` | Admin | Read Redis availability and cache counters. |
+| `POST /api/system/reset` | Admin | Clear and reseed the database. Requires `confirm: true`; removes user accounts. |
+
+Protected endpoints return an error response for missing sessions or insufficient permissions. Tracking, flights, bays, and conveyor responses may include `X-Cache: HIT` or `X-Cache: MISS` when Redis caching is enabled.
+
+### Example: log in and track a bag
+
+```sh
+curl -i -c session.txt \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"ramesh","password":"pass123"}' \
+  http://localhost:8080/api/login
+
+curl -b session.txt \
+  'http://localhost:8080/api/baggage/track?id=BAG-101'
 ```
-http://localhost:8080
-```
 
-### Initial Accounts for Evaluation
-- **Administrator**: `admin` / `admin123`
-- **Baggage Manager**: `manager` / `manager123`
-- **Passenger**: `ramesh` / `pass123` (Linked to Passenger P101)
-- **Passenger**: `priya` / `pass123` (Linked to Passenger P102)
+The tracking response contains the current location and status, estimated route time, current and remaining route, urgency fields, and recorded movement history. Keep `session.txt` local and delete it when finished.
 
----
+## Verification
 
-## 10. Object-Oriented Programming (OOP) Principles
+`src/TestRunner.java` provides an executable verification suite without a separate testing framework. It covers:
 
-- **Encapsulation**: Models keep fields private (`private String bagId; private BaggageStatus status;`) and expose guarded mutators (e.g. `setClearance` enforces status transitions, `assignFlight` validates cutoff).
-- **Inheritance**: Base class `Baggage` is extended by `OriginBag`, `TransferBag`, and `IncomingBag` to model distinct workflow behaviors without duplicating code.
-- **Polymorphism**: The priority processing queue treats all subclasses as `Baggage`, invoking polymorphic getters (`isTransferBag()`, `isIncomingBag()`) during priority comparison and routing.
-- **Abstraction**: `ConveyorRoutePlanner` abstracts graph representation and Dijkstra shortest-path calculations behind simple method calls (`getShortestPath`, `markConveyorUnavailable`).
-- **Single Responsibility**: `FuzzyUrgency` owns only fuzzy membership and rule evaluation; `RedisCache` owns only cache transport, TTL, statistics, and invalidation. `BaggageService` orchestrates when urgency is refreshed and when cache entries are invalidated.
+- Administrator setup, account creation, login, and role permissions.
+- Passenger access to their own bags and rejection of another passenger’s records.
+- Registration, tag lookup, duplicate IDs, and multiple bags per passenger.
+- Incoming, outgoing, and transfer workflows.
+- Dijkstra routing, alternate routes after a conveyor is disabled, and route restoration.
+- Loading-cutoff handling and SQLite persistence.
+- Audit logging, fuzzy urgency calculations, and cutoff-first queue ordering.
+- Redis hits, invalidation, and fallback when Redis is unavailable.
 
----
+Run it using the platform-specific command in [Build and run](#build-and-run). The runner uses an isolated database and removes that file before and after execution.
 
-## 11. Sustainable Development Goals (SDG) Alignment
+## Known limits and data notes
 
-- **SDG 9: Industry, Innovation, and Infrastructure**: Automated routing algorithms reduce mechanical conveyor idle time and optimize electric belt usage.
-- **SDG 11: Sustainable Cities and Communities**: Reliable regional airport baggage flow reduces passenger flight delays, missed connections, and airport congestion.
-- **SDG 12: Responsible Consumption and Production**: Proactive failure rerouting prevents baggage pileups and mechanical wear on overloaded conveyor segments.
+- All passenger, baggage, flight, and conveyor information is synthetic. The graph represents a small demonstration network, not an airport layout.
+- Movement is a manager-recorded simulation. The 2.5-second browser refresh reads the Java API; there are no live belt sensors or external integrations.
+- The included `data/airport.db` and the empty-database seed in `BaggageService.java` currently differ. The database snapshot lists MAA flights directly to Delhi, Mumbai, Bengaluru, and Dubai. The Java seed uses destination labels that mention Madurai, Coimbatore, Tiruchirappalli, and Singapore. These places are not separate nodes in the conveyor graph, so the labels do not represent modeled connections. Align the seed and database before presenting the wider routes as implemented.
+- The simulated clock resets to 09:00 when the Java process restarts; it is not persisted as a separate database value.
+- Redis improves repeat-read behavior only when available. No measured performance comparison is included.
+- The service uses plain HTTP and is designed for local demonstration. It has no HTTPS setup, no airline integration, and no production deployment or high-availability configuration.
 
----
+## Troubleshooting
 
-## 12. Viva Presentation & Demonstration Checklist
+| Issue | Check |
+|---|---|
+| `Main` cannot find the web files or database | Start the Java process from the repository root. |
+| `Address already in use` on startup | Port `8080` is occupied. Stop the other process or change `PORT` in `src/Main.java`, then recompile. |
+| SQLite driver error | Confirm `lib/sqlite-jdbc.jar` is present and included with `-cp "lib/*"`. |
+| Redis connection message | Redis is optional. Check `REDIS_HOST` and `REDIS_PORT`, or continue without Redis. |
+| Login fails | Confirm the account exists in the active database snapshot. The first-admin setup is available only when there is no active administrator. |
+| Reset removed logins | The clean reset removes all users; create a new first administrator through the Account Setup Portal. |
 
-1. **Architecture Explanation**: Walk through the five core Java classes plus the two focused helpers (`FuzzyUrgency`, `RedisCache`) and explain how models, routing, database, auth, scoring, and caching are cleanly partitioned.
-2. **Dijkstra Routing Demonstration**: Show route `CHECK-IN` → `BAY-A` (19 mins). In the Conveyor Network tab, disable `SORTING` → `CENTRAL`. Show how the system dynamically recalculates the route via `TRANSFER-A` (21 mins).
-3. **PriorityQueue Tie-Breaking**: Demonstrate why `BAG-103` (Cutoff 10:15 AM) is dispatched ahead of `BAG-102` (Cutoff 10:30 AM), proving deadline-first prioritization even when the later bag has a higher fuzzy urgency.
-4. **Fuzzy Urgency Demonstration**: Open the tracking modal for `BAG-102` and explain the four inputs, the winning rule, and why the score is `48 MEDIUM`. Advance the simulated clock or process the queue and show the score changing deterministically. Show that incoming baggage displays `—` because it is not eligible.
-5. **Redis Cache Demonstration**: With Redis running, request the same track/flights/conveyors endpoint twice and show `X-Cache: MISS` followed by `X-Cache: HIT`. Step a bag forward and show the next request misses/returns the new position. Stop Redis and show the application continues to work from SQLite.
-6. **Role Security & Passenger Privacy**: Log in as `ramesh` and show that only his 4 bags are visible. Show that accessing other passenger records is blocked by Java backend authorization.
-7. **Persistence**: Advance the simulated clock, restart the Java application, and show that all baggage statuses, `queuedSince` values, and audit logs remain intact in SQLite.
