@@ -294,8 +294,28 @@
                             </div>
 
                             <h4 class="mt-4 mb-2">Conveyor Network Topology &amp; Active Route</h4>
+
+                            <div class="graph-toolbar">
+                                <div class="graph-toolbar-actions">
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-pax-graph-fit" title="Fit complete network to screen">
+                                        <span>⛶</span> Fit to Screen
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-pax-graph-center" title="Center graph in viewport">
+                                        <span>🎯</span> Center
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-pax-graph-reset" title="Reset layout and zoom">
+                                        <span>↺</span> Reset
+                                    </button>
+                                </div>
+                                <div class="graph-toolbar-controls">
+                                    <button type="button" class="btn btn-sm btn-outline btn-icon-only" id="btn-pax-graph-zoom-out" title="Zoom Out">−</button>
+                                    <span class="toolbar-value-pill" id="pax-graph-zoom-level">100%</span>
+                                    <button type="button" class="btn btn-sm btn-outline btn-icon-only" id="btn-pax-graph-zoom-in" title="Zoom In">+</button>
+                                </div>
+                            </div>
+
                             <div class="conveyor-graph-wrapper" id="passenger-conveyor-graph-wrapper">
-                                <svg id="passenger-conveyor-svg" viewBox="0 0 1060 520" preserveAspectRatio="xMidYMid meet"></svg>
+                                <svg id="passenger-conveyor-svg" viewBox="0 0 1440 820" preserveAspectRatio="xMidYMid meet"></svg>
                             </div>
                         </div>
                     </section>
@@ -477,8 +497,42 @@
                                 </div>
                             </div>
 
+                            <!-- Interactive Graph Arrangement Toolbar -->
+                            <div class="graph-toolbar">
+                                <div class="graph-toolbar-actions">
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-graph-auto-arrange" title="Auto arrange graph into topological layers">
+                                        <span>⚡</span> Auto Arrange
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-graph-fit" title="Fit complete network to screen">
+                                        <span>⛶</span> Fit to Screen
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-graph-center" title="Center graph in viewport">
+                                        <span>🎯</span> Center
+                                    </button>
+                                    <button type="button" class="btn btn-sm btn-outline" id="btn-graph-reset" title="Reset layout and zoom to defaults">
+                                        <span>↺</span> Reset Layout
+                                    </button>
+                                </div>
+
+                                <div class="graph-toolbar-controls">
+                                    <div class="toolbar-control-group">
+                                        <span class="toolbar-label">Zoom:</span>
+                                        <button type="button" class="btn btn-sm btn-outline btn-icon-only" id="btn-graph-zoom-out" title="Zoom Out">−</button>
+                                        <span class="toolbar-value-pill" id="graph-zoom-level">100%</span>
+                                        <button type="button" class="btn btn-sm btn-outline btn-icon-only" id="btn-graph-zoom-in" title="Zoom In">+</button>
+                                    </div>
+
+                                    <div class="toolbar-control-group">
+                                        <span class="toolbar-label">Spacing:</span>
+                                        <button type="button" class="btn btn-sm btn-outline btn-icon-only" id="btn-graph-spacing-decrease" title="Decrease spacing">−</button>
+                                        <span class="toolbar-value-pill" id="graph-spacing-level">1.0x</span>
+                                        <button type="button" class="btn btn-sm btn-outline btn-icon-only" id="btn-graph-spacing-increase" title="Increase spacing">+</button>
+                                    </div>
+                                </div>
+                            </div>
+
                             <div class="conveyor-graph-wrapper" id="live-conveyor-graph-wrapper">
-                                <svg id="live-conveyor-svg" viewBox="0 0 1060 520" preserveAspectRatio="xMidYMid meet"></svg>
+                                <svg id="live-conveyor-svg" viewBox="0 0 1440 820" preserveAspectRatio="xMidYMid meet"></svg>
                             </div>
 
                             <!-- Visual Legend -->
@@ -1144,6 +1198,39 @@
                 <div class="modal-footer">
                     <button class="btn btn-secondary" id="modal-user-cancel">Cancel</button>
                     <button class="btn btn-primary" id="modal-user-submit">Create Account</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- ==================== MODAL: NODE BAGGAGE INSPECTOR ==================== -->
+        <div id="modal-node-baggage-inspector" class="modal-backdrop" style="display:none;">
+            <div class="modal-dialog modal-lg">
+                <div class="modal-header">
+                    <div>
+                        <h3 id="modal-node-inspector-title">Conveyor Node Baggage Manifest</h3>
+                        <span class="subtext" id="modal-node-inspector-subtitle">Baggage currently positioned at this conveyor node</span>
+                    </div>
+                    <button class="modal-close" id="modal-node-inspector-close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Baggage ID</th>
+                                    <th>Passenger</th>
+                                    <th>Flight</th>
+                                    <th>Destination</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="modal-node-inspector-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" id="modal-node-inspector-btn-close">Close</button>
                 </div>
             </div>
         </div>

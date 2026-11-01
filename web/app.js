@@ -25,7 +25,25 @@ document.addEventListener('DOMContentLoaded', () => {
         pollingActive: true,
         pollingTimer: null,
         liveTrackingData: { baggage: [], conveyors: [] },
-        liveManifestFilter: { query: '', direction: 'ALL', status: 'ALL' }
+        liveManifestFilter: { query: '', direction: 'ALL', status: 'ALL' },
+        graphState: {
+            'live-conveyor-svg': {
+                panX: 0,
+                panY: 0,
+                scale: 1.0,
+                spacingFactor: 1.0,
+                customNodePositions: {},
+                initialized: false
+            },
+            'passenger-conveyor-svg': {
+                panX: 0,
+                panY: 0,
+                scale: 1.0,
+                spacingFactor: 1.0,
+                customNodePositions: {},
+                initialized: false
+            }
+        }
     };
 
     // DOM Elements
@@ -1693,6 +1711,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const refreshBagsBtn = document.getElementById('passenger-refresh-bags-btn');
         if (refreshBagsBtn) refreshBagsBtn.addEventListener('click', () => loadBaggage());
+
+        setupGraphToolbar('passenger-conveyor-svg');
+        setupGraphInteractions('passenger-conveyor-svg', 'passenger-conveyor-graph-wrapper');
     }
 
     function populatePassengerSelects() {
@@ -1884,23 +1905,6 @@ document.addEventListener('DOMContentLoaded', () => {
     // ==================== LIVE BAGGAGE TRACKING & CONVEYOR GRAPH ====================
 
     const POLLING_INTERVAL_MS = 2500;
-
-    const NETWORK_NODE_LAYOUT = {
-        'CHECK-IN': { x: 90, y: 120, label: 'CHECK-IN', sub: 'Origins' },
-        'UNLOAD-POINT': { x: 90, y: 400, label: 'UNLOAD', sub: 'Arrivals' },
-        'SORTING': { x: 270, y: 120, label: 'SORTING', sub: 'Main Hub' },
-        'TRANSFER-B': { x: 440, y: 70, label: 'XFER-B', sub: 'Express' },
-        'TRANSFER-A': { x: 440, y: 250, label: 'XFER-A', sub: 'Interline' },
-        'CENTRAL': { x: 620, y: 170, label: 'CENTRAL', sub: 'Router' },
-        'BAY-AREA': { x: 790, y: 120, label: 'BAY-AREA', sub: 'Manifold' },
-        'BAY-A': { x: 960, y: 50, label: 'BAY-A', sub: 'BAY-A' },
-        'BAY-B': { x: 960, y: 110, label: 'BAY-B', sub: 'BAY-B' },
-        'BAY-C': { x: 960, y: 170, label: 'BAY-C', sub: 'BAY-C' },
-        'BAY-D': { x: 960, y: 230, label: 'BAY-D', sub: 'BAY-D' },
-        'CLAIM-AREA': { x: 790, y: 400, label: 'CLAIM-AREA', sub: 'Arrivals' },
-        'CLAIM-CAROUSEL-1': { x: 960, y: 360, label: 'CAROUSEL-1', sub: 'Domestic' },
-        'CLAIM-CAROUSEL-2': { x: 960, y: 440, label: 'CAROUSEL-2', sub: 'Intl' }
-    };
 
     function setupLiveTracking() {
         // Mode Toggles
@@ -2103,6 +2107,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 startLivePolling();
             }
         });
+
+        setupGraphToolbar('live-conveyor-svg');
+        setupGraphInteractions('live-conveyor-svg', 'live-conveyor-graph-wrapper');
     }
 
     function startLivePolling() {
@@ -2349,12 +2356,164 @@ document.addEventListener('DOMContentLoaded', () => {
         renderConveyorNetworkSvg('live-conveyor-svg', state.liveTrackingData.baggage, state.liveTrackingData.conveyors, null);
     }
 
+    // ==================== TOPOLOGICAL DATABASE GRAPH LAYOUT ====================
+
+    function computeConveyorTopologyLayout(conveyorList, spacingFactor = 1.0, customPositions = {}) {
+        conveyorList = conveyorList || (state.conveyorList && state.conveyorList.length > 0 ? state.conveyorList : (state.liveTrackingData && state.liveTrackingData.conveyors ? state.liveTrackingData.conveyors : []));
+
+        // 1. Collect distinct node IDs dynamically from actual conveyor segments
+        const nodeSet = new Set();
+        (conveyorList || []).forEach(s => {
+            if (s.fromNode) nodeSet.add(s.fromNode);
+            if (s.toNode) nodeSet.add(s.toNode);
+        });
+
+        // Ensure default operational nodes if list is empty
+        if (nodeSet.size === 0) {
+            ['CHECK-IN', 'UNLOAD-POINT', 'SORTING', 'TRANSFER-B', 'TRANSFER-A', 'CENTRAL', 
+             'BAY-AREA', 'BAY-A', 'BAY-B', 'BAY-C', 'BAY-D', 'CLAIM-AREA', 'CLAIM-CAROUSEL-1', 'CLAIM-CAROUSEL-2']
+             .forEach(n => nodeSet.add(n));
+        }
+
+        // 2. Base layer assignments representing actual airport journey:
+        // CHECK-IN / UNLOAD → SORTING → TRANSFER POINTS → CENTRAL → BAY-AREA / CLAIM-AREA → LOADING BAYS / CAROUSELS
+        const defaultLayers = {
+            'CHECK-IN': 0,
+            'UNLOAD-POINT': 0,
+            'SORTING': 1,
+            'TRANSFER-B': 2,
+            'TRANSFER-A': 2,
+            'CENTRAL': 3,
+            'BAY-AREA': 4,
+            'CLAIM-AREA': 4,
+            'BAY-A': 5,
+            'BAY-B': 5,
+            'BAY-C': 5,
+            'BAY-D': 5,
+            'CLAIM-CAROUSEL-1': 5,
+            'CLAIM-CAROUSEL-2': 5
+        };
+
+        const layerMap = {};
+        nodeSet.forEach(id => {
+            if (defaultLayers[id] !== undefined) {
+                layerMap[id] = defaultLayers[id];
+            } else {
+                if (id.startsWith('BAY-') && id !== 'BAY-AREA') layerMap[id] = 5;
+                else if (id.includes('CAROUSEL') || id.includes('CLAIM')) layerMap[id] = 5;
+                else if (id.includes('TRANSFER')) layerMap[id] = 2;
+                else layerMap[id] = 3;
+            }
+        });
+
+        // 3. Base layout coordinates with generous spacing (1440 x 820 canvas coordinate system)
+        const baseXByLayer = {
+            0: 120,
+            1: 360,
+            2: 600,
+            3: 840,
+            4: 1080,
+            5: 1320
+        };
+
+        const defaultYPositions = {
+            'BAY-A': 90,
+            'BAY-B': 200,
+            'BAY-C': 310,
+            'BAY-D': 420,
+            'CLAIM-CAROUSEL-1': 590,
+            'CLAIM-CAROUSEL-2': 710,
+            'BAY-AREA': 255,
+            'CLAIM-AREA': 650,
+            'CENTRAL': 370,
+            'TRANSFER-B': 150,
+            'TRANSFER-A': 320,
+            'SORTING': 200,
+            'CHECK-IN': 200,
+            'UNLOAD-POINT': 560
+        };
+
+        const sublabels = {
+            'CHECK-IN': 'Departure Origin',
+            'UNLOAD-POINT': 'Arrival Aircraft',
+            'SORTING': 'Main Sorting Matrix',
+            'TRANSFER-B': 'Express Transit',
+            'TRANSFER-A': 'Interline Transfer',
+            'CENTRAL': 'Main Router Hub',
+            'BAY-AREA': 'Departure Manifold',
+            'CLAIM-AREA': 'Arrival Claim Router',
+            'BAY-A': 'Loading Bay',
+            'BAY-B': 'Loading Bay',
+            'BAY-C': 'Loading Bay',
+            'BAY-D': 'Loading Bay',
+            'CLAIM-CAROUSEL-1': 'Domestic Carousel',
+            'CLAIM-CAROUSEL-2': 'International Carousel'
+        };
+
+        const layout = {};
+        const canvasCenterX = 720;
+        const canvasCenterY = 410;
+
+        nodeSet.forEach(nodeId => {
+            const layer = layerMap[nodeId] !== undefined ? layerMap[nodeId] : 3;
+            const rawBaseX = baseXByLayer[layer] !== undefined ? baseXByLayer[layer] : canvasCenterX;
+            const rawBaseY = defaultYPositions[nodeId] !== undefined ? defaultYPositions[nodeId] : canvasCenterY;
+
+            // Apply spacing factor around canvas center
+            const calculatedX = Math.round(canvasCenterX + (rawBaseX - canvasCenterX) * spacingFactor);
+            const calculatedY = Math.round(canvasCenterY + (rawBaseY - canvasCenterY) * spacingFactor);
+
+            // Prioritize user manual drag coordinates if available
+            const posX = (customPositions && customPositions[nodeId] && customPositions[nodeId].x !== undefined)
+                ? customPositions[nodeId].x
+                : calculatedX;
+            const posY = (customPositions && customPositions[nodeId] && customPositions[nodeId].y !== undefined)
+                ? customPositions[nodeId].y
+                : calculatedY;
+
+            let dynamicSub = sublabels[nodeId] || 'Conveyor Node';
+            if (nodeId.startsWith('BAY-') && nodeId !== 'BAY-AREA') {
+                const assigned = (state.flightList || []).find(f => f.assignedBay === nodeId);
+                if (assigned) {
+                    dynamicSub = assigned.flightId;
+                }
+            }
+
+            layout[nodeId] = {
+                x: posX,
+                y: posY,
+                label: nodeId,
+                sub: dynamicSub,
+                layer: layer
+            };
+        });
+
+        return layout;
+    }
+
+    // ==================== CONVEYOR NETWORK SVG RENDERING ====================
+
     function renderConveyorNetworkSvg(svgElementId, baggageList, conveyorList, selectedBagDetail) {
         const svg = document.getElementById(svgElementId);
         if (!svg) return;
 
         baggageList = baggageList || [];
-        conveyorList = conveyorList || [];
+        conveyorList = conveyorList || (state.conveyorList && state.conveyorList.length > 0 ? state.conveyorList : (state.liveTrackingData && state.liveTrackingData.conveyors ? state.liveTrackingData.conveyors : []));
+
+        if (!state.graphState[svgElementId]) {
+            state.graphState[svgElementId] = {
+                panX: 0,
+                panY: 0,
+                scale: 1.0,
+                spacingFactor: 1.0,
+                customNodePositions: {},
+                initialized: false
+            };
+        }
+        const gState = state.graphState[svgElementId];
+
+        // Compute dynamic topology layout
+        const layout = computeConveyorTopologyLayout(conveyorList, gState.spacingFactor, gState.customNodePositions);
 
         // Map bags by currentLocation
         const bagsByLoc = {};
@@ -2369,8 +2528,10 @@ document.addEventListener('DOMContentLoaded', () => {
         // Determine route segments for selectedBagDetail
         const completedSegments = new Set();
         const remainingSegments = new Set();
+        let currentSelectedLoc = null;
 
         if (selectedBagDetail) {
+            currentSelectedLoc = selectedBagDetail.currentLocation;
             const completed = selectedBagDetail.completedRoute || [];
             for (let i = 0; i < completed.length - 1; i++) {
                 completedSegments.add(`${completed[i]}->${completed[i + 1]}`);
@@ -2382,7 +2543,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // Build defs with arrow markers
+        // Defs with arrow markers
         const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         const defaultArrowColor = isDark ? '#64748b' : '#94a3b8';
         const routeArrowColor = '#2563eb';
@@ -2391,26 +2552,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
         let svgContent = `
             <defs>
-                <marker id="arrow-default-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <marker id="arrow-default-${svgElementId}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                     <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${defaultArrowColor}"/>
                 </marker>
-                <marker id="arrow-route-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                <marker id="arrow-route-${svgElementId}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
                     <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${routeArrowColor}"/>
                 </marker>
-                <marker id="arrow-completed-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <marker id="arrow-completed-${svgElementId}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                     <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${completedArrowColor}"/>
                 </marker>
-                <marker id="arrow-failed-${svgElementId}" viewBox="0 0 10 10" refX="25" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <marker id="arrow-failed-${svgElementId}" viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
                     <path d="M 0 1.5 L 8 5 L 0 8.5 z" fill="${failedArrowColor}"/>
                 </marker>
             </defs>
+
+            <!-- Background Pan Catcher -->
+            <rect class="pan-catcher" x="-10000" y="-10000" width="20000" height="20000" fill="transparent"></rect>
+
+            <g id="${svgElementId}-viewport" class="graph-viewport-layer" transform="translate(${gState.panX}, ${gState.panY}) scale(${gState.scale})">
         `;
 
-        // Render Edges
+        // Edges Layer
         svgContent += `<g class="edges-layer">`;
+        const R = 24; // Node radius
+
         conveyorList.forEach(s => {
-            const u = NETWORK_NODE_LAYOUT[s.fromNode];
-            const v = NETWORK_NODE_LAYOUT[s.toNode];
+            const u = layout[s.fromNode];
+            const v = layout[s.toNode];
             if (!u || !v) return;
 
             const segKey = `${s.fromNode}->${s.toNode}`;
@@ -2432,11 +2600,27 @@ document.addEventListener('DOMContentLoaded', () => {
                 markerId = `arrow-completed-${svgElementId}`;
             }
 
-            svgContent += `<path d="M ${u.x} ${u.y} L ${v.x} ${v.y}" class="${edgeClass}" marker-end="url(#${markerId})"></path>`;
+            // Boundary intersection calculation
+            const dx = v.x - u.x;
+            const dy = v.y - u.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist === 0) return;
 
-            // Midpoint processing time pill
-            const mx = (u.x + v.x) / 2;
-            const my = (u.y + v.y) / 2;
+            const sx = u.x + (dx / dist) * R;
+            const sy = u.y + (dy / dist) * R;
+            const ex = v.x - (dx / dist) * (R + 7);
+            const ey = v.y - (dy / dist) * (R + 7);
+
+            svgContent += `<path d="M ${sx} ${sy} L ${ex} ${ey}" class="${edgeClass}" marker-end="url(#${markerId})" data-edge="${segKey}"></path>`;
+
+            // Midpoint processing time pill offset perpendicularly
+            const mx = (sx + ex) / 2;
+            const my = (sy + ey) / 2;
+            const normX = -dy / dist;
+            const normY = dx / dist;
+            const pillX = Math.round(mx + normX * 11);
+            const pillY = Math.round(my + normY * 11);
+
             const timeLabel = isFailed ? 'JAM' : `${s.processingTime}m`;
             const bgFill = isFailed 
                 ? (isDark ? '#7f1d1d' : '#fee2e2') 
@@ -2449,18 +2633,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 : (isRoute ? (isDark ? '#3b82f6' : '#93c5fd') : (isDark ? '#475569' : '#cbd5e1'));
 
             svgContent += `
-                <g transform="translate(${mx}, ${my})">
-                    <rect class="edge-weight-bg" x="-15" y="-8" width="30" height="16" rx="3" fill="${bgFill}" stroke="${strokeColor}"></rect>
+                <g class="edge-weight-group" data-edge="${segKey}" transform="translate(${pillX}, ${pillY})">
+                    <rect class="edge-weight-bg" x="-16" y="-9" width="32" height="18" rx="4" fill="${bgFill}" stroke="${strokeColor}"></rect>
                     <text class="edge-weight-text" fill="${textColor}">${timeLabel}</text>
                 </g>
             `;
         });
         svgContent += `</g>`;
 
-        // Render Nodes
+        // Nodes Layer
         svgContent += `<g class="nodes-layer">`;
-        Object.keys(NETWORK_NODE_LAYOUT).forEach(nodeId => {
-            const pos = NETWORK_NODE_LAYOUT[nodeId];
+        Object.keys(layout).forEach(nodeId => {
+            const pos = layout[nodeId];
             const bagsAtNode = bagsByLoc[nodeId] || [];
 
             let colorClass = 'node-grey';
@@ -2480,24 +2664,17 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             }
 
-            const isSelectedNode = selectedBagDetail && (selectedBagDetail.currentLocation === nodeId);
-
-            let dynamicSub = pos.sub;
-            if (nodeId.startsWith('BAY-')) {
-                const assigned = (state.flightList || []).find(f => f.assignedBay === nodeId);
-                if (assigned) {
-                    dynamicSub = assigned.flightId;
-                }
-            }
+            const isSelectedNode = selectedBagDetail && (currentSelectedLoc === nodeId);
 
             svgContent += `
-                <g class="conveyor-node-group" data-node="${nodeId}" title="${nodeId}: ${bagsAtNode.length} bag(s) present">
-                    <circle class="node-circle ${colorClass} ${isSelectedNode ? 'node-selected' : ''}" cx="${pos.x}" cy="${pos.y}" r="22"></circle>
+                <g class="conveyor-node-group" data-node="${nodeId}" title="${nodeId}: ${bagsAtNode.length} bag(s) present (Drag to move, click to inspect)">
+                    ${isSelectedNode ? `<circle class="node-pulse-ring" cx="${pos.x}" cy="${pos.y}"></circle>` : ''}
+                    <circle class="node-circle ${colorClass} ${isSelectedNode ? 'node-selected' : ''}" cx="${pos.x}" cy="${pos.y}" r="${R}"></circle>
                     <text class="node-label" x="${pos.x}" y="${pos.y - 28}">${pos.label}</text>
-                    <text class="node-sublabel" x="${pos.x}" y="${pos.y - 39}">${dynamicSub}</text>
+                    <text class="node-sublabel" x="${pos.x}" y="${pos.y - 41}">${pos.sub}</text>
             `;
 
-            // Baggage IDs pill under node
+            // Baggage Indicators
             const normalPillFill = isDark ? '#0284c7' : '#0f172a';
 
             if (bagsAtNode.length === 1) {
@@ -2505,71 +2682,541 @@ document.addEventListener('DOMContentLoaded', () => {
                 const isBagSelected = selectedBagDetail && (selectedBagDetail.bagId === b.bagId);
                 const pillFill = isBagSelected ? '#2563eb' : normalPillFill;
                 svgContent += `
-                    <g class="node-bag-pill-group" data-bagid="${b.bagId}">
-                        <rect class="node-bag-pill" x="${pos.x - 30}" y="${pos.y + 25}" width="60" height="17" rx="3" fill="${pillFill}"></rect>
-                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34}">${b.bagId}</text>
+                    <g class="node-bag-pill-group" data-bagid="${b.bagId}" title="Track Bag ${b.bagId}">
+                        <rect class="node-bag-pill ${isBagSelected ? 'pill-selected' : ''}" x="${pos.x - 35}" y="${pos.y + 26}" width="70" height="18" rx="4" fill="${pillFill}"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 35}">${b.bagId}</text>
                     </g>
                 `;
             } else if (bagsAtNode.length === 2) {
                 const b1 = bagsAtNode[0];
                 const b2 = bagsAtNode[1];
-                const fill1 = (selectedBagDetail && selectedBagDetail.bagId === b1.bagId) ? '#2563eb' : normalPillFill;
-                const fill2 = (selectedBagDetail && selectedBagDetail.bagId === b2.bagId) ? '#2563eb' : normalPillFill;
+                const isBag1Selected = selectedBagDetail && (selectedBagDetail.bagId === b1.bagId);
+                const isBag2Selected = selectedBagDetail && (selectedBagDetail.bagId === b2.bagId);
+                const fill1 = isBag1Selected ? '#2563eb' : normalPillFill;
+                const fill2 = isBag2Selected ? '#2563eb' : normalPillFill;
                 svgContent += `
-                    <g class="node-bag-pill-group" data-bagid="${b1.bagId}">
-                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 25}" width="64" height="15" rx="3" fill="${fill1}"></rect>
-                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 33}">${b1.bagId}</text>
+                    <g class="node-bag-pill-group" data-bagid="${b1.bagId}" title="Track Bag ${b1.bagId}">
+                        <rect class="node-bag-pill ${isBag1Selected ? 'pill-selected' : ''}" x="${pos.x - 35}" y="${pos.y + 26}" width="70" height="17" rx="4" fill="${fill1}"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34.5}">${b1.bagId}</text>
                     </g>
-                    <g class="node-bag-pill-group" data-bagid="${b2.bagId}">
-                        <rect class="node-bag-pill" x="${pos.x - 32}" y="${pos.y + 42}" width="64" height="15" rx="3" fill="${fill2}"></rect>
-                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 50}">${b2.bagId}</text>
+                    <g class="node-bag-pill-group" data-bagid="${b2.bagId}" title="Track Bag ${b2.bagId}">
+                        <rect class="node-bag-pill ${isBag2Selected ? 'pill-selected' : ''}" x="${pos.x - 35}" y="${pos.y + 45}" width="70" height="17" rx="4" fill="${fill2}"></rect>
+                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 53.5}">${b2.bagId}</text>
                     </g>
                 `;
             } else if (bagsAtNode.length > 2) {
-                const bagListStr = bagsAtNode.map(b => b.bagId).join(', ');
                 const hasSelected = selectedBagDetail && bagsAtNode.some(b => b.bagId === selectedBagDetail.bagId);
-                const multiFill = hasSelected ? '#2563eb' : (isDark ? '#1e3a8a' : '#1e3a8a');
+                const multiFill = hasSelected ? '#2563eb' : (isDark ? '#1e293b' : '#e2e8f0');
+                const multiTextColor = hasSelected ? '#ffffff' : (isDark ? '#f8fafc' : '#0f172a');
                 svgContent += `
-                    <g class="node-bag-pill-group" data-bagid="${bagsAtNode[0].bagId}" title="${bagListStr}">
-                        <rect class="node-bag-pill" x="${pos.x - 36}" y="${pos.y + 25}" width="72" height="17" rx="3" fill="${multiFill}"></rect>
-                        <text class="node-bag-pill-text" x="${pos.x}" y="${pos.y + 34}">${bagsAtNode.length} Bags</text>
+                    <g class="node-bag-pill-group pill-multi-group" data-node="${nodeId}" title="Click to view all ${bagsAtNode.length} bags at ${nodeId}">
+                        <rect class="node-bag-pill pill-multi ${hasSelected ? 'pill-selected' : ''}" x="${pos.x - 42}" y="${pos.y + 26}" width="84" height="20" rx="4" fill="${multiFill}"></rect>
+                        <text class="node-bag-pill-text ${hasSelected ? '' : 'text-multi'}" fill="${multiTextColor}" x="${pos.x}" y="${pos.y + 36}">📦 ${bagsAtNode.length} Bags ▾</text>
                     </g>
                 `;
             }
 
             svgContent += `</g>`;
         });
-        svgContent += `</g>`;
+        svgContent += `</g>`; // End nodes-layer
+        svgContent += `</g>`; // End viewport
 
         svg.innerHTML = svgContent;
 
-        // Interactive click listeners
+        // Attach click listeners to pill groups
         svg.querySelectorAll('.node-bag-pill-group').forEach(grp => {
             grp.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const bagId = grp.getAttribute('data-bagid');
-                if (bagId) {
-                    if (svgElementId === 'live-conveyor-svg') {
-                        selectBagForTracking(bagId);
-                    } else if (svgElementId === 'passenger-conveyor-svg') {
-                        renderPassengerLiveRoute(bagId, false);
+                if (grp.classList.contains('pill-multi-group')) {
+                    const nodeId = grp.getAttribute('data-node');
+                    const bags = bagsByLoc[nodeId] || [];
+                    openNodeBaggageInspector(nodeId, bags);
+                } else {
+                    const bagId = grp.getAttribute('data-bagid');
+                    if (bagId) {
+                        if (svgElementId === 'live-conveyor-svg') {
+                            selectBagForTracking(bagId);
+                        } else if (svgElementId === 'passenger-conveyor-svg') {
+                            renderPassengerLiveRoute(bagId, false);
+                        }
                     }
                 }
             });
         });
 
-        svg.querySelectorAll('.conveyor-node-group').forEach(grp => {
-            grp.addEventListener('click', () => {
-                const nodeId = grp.getAttribute('data-node');
-                const bags = bagsByLoc[nodeId] || [];
-                if (bags.length > 0) {
-                    if (svgElementId === 'live-conveyor-svg') {
-                        selectBagForTracking(bags[0].bagId);
-                    } else if (svgElementId === 'passenger-conveyor-svg') {
-                        renderPassengerLiveRoute(bags[0].bagId, false);
+        // Initial fit to screen once
+        if (!gState.initialized) {
+            gState.initialized = true;
+            setTimeout(() => fitGraphToScreen(svgElementId), 60);
+        }
+    }
+
+    // ==================== LIVE NODE AND EDGE REAL-TIME DRAGGING ====================
+
+    function updateLiveNodeAndEdges(svgElementId, nodeId, newX, newY) {
+        const svg = document.getElementById(svgElementId);
+        if (!svg) return;
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+
+        // 1. Update node element positions
+        const nodeGroup = svg.querySelector(`.conveyor-node-group[data-node="${nodeId}"]`);
+        if (nodeGroup) {
+            const circle = nodeGroup.querySelector('circle.node-circle');
+            const pulse = nodeGroup.querySelector('circle.node-pulse-ring');
+            const label = nodeGroup.querySelector('text.node-label');
+            const sublabel = nodeGroup.querySelector('text.node-sublabel');
+
+            if (circle) { circle.setAttribute('cx', newX); circle.setAttribute('cy', newY); }
+            if (pulse) { pulse.setAttribute('cx', newX); pulse.setAttribute('cy', newY); }
+            if (label) { label.setAttribute('x', newX); label.setAttribute('y', newY - 28); }
+            if (sublabel) { sublabel.setAttribute('x', newX); sublabel.setAttribute('y', newY - 41); }
+
+            const pills = nodeGroup.querySelectorAll('.node-bag-pill-group');
+            if (pills.length === 1) {
+                const rect = pills[0].querySelector('rect');
+                const text = pills[0].querySelector('text');
+                if (pills[0].classList.contains('pill-multi-group')) {
+                    if (rect) { rect.setAttribute('x', newX - 42); rect.setAttribute('y', newY + 26); }
+                    if (text) { text.setAttribute('x', newX); text.setAttribute('y', newY + 36); }
+                } else {
+                    if (rect) { rect.setAttribute('x', newX - 35); rect.setAttribute('y', newY + 26); }
+                    if (text) { text.setAttribute('x', newX); text.setAttribute('y', newY + 35); }
+                }
+            } else if (pills.length === 2) {
+                const rect1 = pills[0].querySelector('rect');
+                const text1 = pills[0].querySelector('text');
+                const rect2 = pills[1].querySelector('rect');
+                const text2 = pills[1].querySelector('text');
+                if (rect1) { rect1.setAttribute('x', newX - 35); rect1.setAttribute('y', newY + 26); }
+                if (text1) { text1.setAttribute('x', newX); text1.setAttribute('y', newY + 34.5); }
+                if (rect2) { rect2.setAttribute('x', newX - 35); rect2.setAttribute('y', newY + 45); }
+                if (text2) { text2.setAttribute('x', newX); text2.setAttribute('y', newY + 53.5); }
+            }
+        }
+
+        // 2. Update connected edges and edge weight badges
+        const layout = computeConveyorTopologyLayout(state.conveyorList, gState.spacingFactor, gState.customNodePositions);
+        const R = 24;
+
+        const edges = svg.querySelectorAll(`path.conveyor-edge[data-edge^="${nodeId}->"], path.conveyor-edge[data-edge$="->${nodeId}"]`);
+        edges.forEach(path => {
+            const segKey = path.getAttribute('data-edge');
+            const [from, to] = segKey.split('->');
+            const u = layout[from];
+            const v = layout[to];
+            if (!u || !v) return;
+
+            const dx = v.x - u.x;
+            const dy = v.y - u.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist === 0) return;
+
+            const sx = u.x + (dx / dist) * R;
+            const sy = u.y + (dy / dist) * R;
+            const ex = v.x - (dx / dist) * (R + 7);
+            const ey = v.y - (dy / dist) * (R + 7);
+
+            path.setAttribute('d', `M ${sx} ${sy} L ${ex} ${ey}`);
+
+            const weightGroup = svg.querySelector(`.edge-weight-group[data-edge="${segKey}"]`);
+            if (weightGroup) {
+                const mx = (sx + ex) / 2;
+                const my = (sy + ey) / 2;
+                const normX = -dy / dist;
+                const normY = dx / dist;
+                const pillX = Math.round(mx + normX * 11);
+                const pillY = Math.round(my + normY * 11);
+                weightGroup.setAttribute('transform', `translate(${pillX}, ${pillY})`);
+            }
+        });
+    }
+
+    // ==================== GRAPH VIEWPORT PAN, ZOOM & DRAG INTERACTIONS ====================
+
+    function setupGraphInteractions(svgElementId, wrapperId) {
+        const svg = document.getElementById(svgElementId);
+        const wrapper = document.getElementById(wrapperId);
+        if (!svg || !wrapper) return;
+
+        if (!state.graphState[svgElementId]) {
+            state.graphState[svgElementId] = {
+                panX: 0,
+                panY: 0,
+                scale: 1.0,
+                spacingFactor: 1.0,
+                customNodePositions: {},
+                initialized: false
+            };
+        }
+        const gState = state.graphState[svgElementId];
+
+        let isPanning = false;
+        let startMouseX = 0, startMouseY = 0;
+        let initialPanX = 0, initialPanY = 0;
+
+        let draggedNodeId = null;
+        let dragStartX = 0, dragStartY = 0;
+        let hasDragged = false;
+
+        // Mouse Wheel Zoom
+        wrapper.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const rect = wrapper.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+
+            const factor = e.deltaY < 0 ? 1.15 : 0.85;
+            const oldScale = gState.scale;
+            const newScale = Math.min(Math.max(parseFloat((oldScale * factor).toFixed(2)), 0.35), 3.0);
+
+            gState.panX = Math.round(mouseX - (mouseX - gState.panX) * (newScale / oldScale));
+            gState.panY = Math.round(mouseY - (mouseY - gState.panY) * (newScale / oldScale));
+            gState.scale = newScale;
+
+            applyViewportTransform(svgElementId, false);
+        }, { passive: false });
+
+        // Pointer Down
+        wrapper.addEventListener('pointerdown', (e) => {
+            const nodeGroup = e.target.closest('.conveyor-node-group');
+            const pillGroup = e.target.closest('.node-bag-pill-group');
+
+            if (pillGroup) return; // Handled by pill group click
+
+            if (nodeGroup) {
+                draggedNodeId = nodeGroup.getAttribute('data-node');
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+                hasDragged = false;
+                nodeGroup.classList.add('is-dragging');
+                wrapper.setPointerCapture(e.pointerId);
+                return;
+            }
+
+            // Canvas Pan
+            isPanning = true;
+            startMouseX = e.clientX;
+            startMouseY = e.clientY;
+            initialPanX = gState.panX;
+            initialPanY = gState.panY;
+            wrapper.classList.add('is-panning');
+            wrapper.setPointerCapture(e.pointerId);
+        });
+
+        // Pointer Move
+        wrapper.addEventListener('pointermove', (e) => {
+            if (draggedNodeId) {
+                const dx = e.clientX - dragStartX;
+                const dy = e.clientY - dragStartY;
+                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+                    hasDragged = true;
+                }
+
+                if (hasDragged) {
+                    const viewport = document.getElementById(`${svgElementId}-viewport`);
+                    if (!viewport) return;
+
+                    const pt = svg.createSVGPoint();
+                    pt.x = e.clientX;
+                    pt.y = e.clientY;
+                    const svgP = pt.matrixTransform(viewport.getScreenCTM().inverse());
+
+                    gState.customNodePositions[draggedNodeId] = {
+                        x: Math.round(svgP.x),
+                        y: Math.round(svgP.y)
+                    };
+
+                    updateLiveNodeAndEdges(svgElementId, draggedNodeId, Math.round(svgP.x), Math.round(svgP.y));
+                }
+                return;
+            }
+
+            if (isPanning) {
+                const dx = e.clientX - startMouseX;
+                const dy = e.clientY - startMouseY;
+                gState.panX = initialPanX + dx;
+                gState.panY = initialPanY + dy;
+                applyViewportTransform(svgElementId, false);
+            }
+        });
+
+        // Pointer Up
+        const onPointerUp = (e) => {
+            if (draggedNodeId) {
+                const nodeId = draggedNodeId;
+                const nodeGroup = svg.querySelector(`.conveyor-node-group[data-node="${nodeId}"]`);
+                if (nodeGroup) nodeGroup.classList.remove('is-dragging');
+                draggedNodeId = null;
+
+                if (!hasDragged) {
+                    // Click without drag
+                    const bags = (state.liveTrackingData && state.liveTrackingData.baggage && state.liveTrackingData.baggage.length > 0 
+                        ? state.liveTrackingData.baggage 
+                        : state.baggageList).filter(b => b.currentLocation === nodeId);
+
+                    if (bags.length === 1) {
+                        if (svgElementId === 'live-conveyor-svg') {
+                            selectBagForTracking(bags[0].bagId);
+                        } else {
+                            renderPassengerLiveRoute(bags[0].bagId, false);
+                        }
+                    } else if (bags.length > 1) {
+                        openNodeBaggageInspector(nodeId, bags);
                     }
                 }
-            });
+            }
+
+            if (isPanning) {
+                isPanning = false;
+                wrapper.classList.remove('is-panning');
+            }
+        };
+
+        wrapper.addEventListener('pointerup', onPointerUp);
+        wrapper.addEventListener('pointercancel', onPointerUp);
+    }
+
+    // ==================== GRAPH TOOLBAR & ARRANGEMENT CONTROLS ====================
+
+    function setupGraphToolbar(svgElementId) {
+        const isLive = (svgElementId === 'live-conveyor-svg');
+        const prefix = isLive ? 'graph' : 'pax-graph';
+
+        const btnAuto = document.getElementById(`btn-${prefix}-auto-arrange`);
+        const btnFit = document.getElementById(`btn-${prefix}-fit`);
+        const btnCenter = document.getElementById(`btn-${prefix}-center`);
+        const btnReset = document.getElementById(`btn-${prefix}-reset`);
+        const btnZoomIn = document.getElementById(`btn-${prefix}-zoom-in`);
+        const btnZoomOut = document.getElementById(`btn-${prefix}-zoom-out`);
+        const btnSpacingInc = document.getElementById(`btn-${prefix}-spacing-increase`);
+        const btnSpacingDec = document.getElementById(`btn-${prefix}-spacing-decrease`);
+
+        if (btnAuto) btnAuto.addEventListener('click', () => autoArrangeGraph(svgElementId));
+        if (btnFit) btnFit.addEventListener('click', () => fitGraphToScreen(svgElementId));
+        if (btnCenter) btnCenter.addEventListener('click', () => centerGraph(svgElementId));
+        if (btnReset) btnReset.addEventListener('click', () => resetGraphLayout(svgElementId));
+        if (btnZoomIn) btnZoomIn.addEventListener('click', () => zoomGraph(svgElementId, 1.25));
+        if (btnZoomOut) btnZoomOut.addEventListener('click', () => zoomGraph(svgElementId, 0.8));
+        if (btnSpacingInc) btnSpacingInc.addEventListener('click', () => adjustGraphSpacing(svgElementId, 0.1));
+        if (btnSpacingDec) btnSpacingDec.addEventListener('click', () => adjustGraphSpacing(svgElementId, -0.1));
+
+        // Node Inspector Modal Close Handlers
+        const closeInspector = () => {
+            const modal = document.getElementById('modal-node-baggage-inspector');
+            if (modal) modal.style.display = 'none';
+        };
+        const closeBtn1 = document.getElementById('modal-node-inspector-close');
+        const closeBtn2 = document.getElementById('modal-node-inspector-btn-close');
+        if (closeBtn1) closeBtn1.addEventListener('click', closeInspector);
+        if (closeBtn2) closeBtn2.addEventListener('click', closeInspector);
+    }
+
+    function applyViewportTransform(svgElementId, animate = false) {
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+        const viewport = document.getElementById(`${svgElementId}-viewport`);
+        if (!viewport) return;
+
+        if (animate) {
+            viewport.classList.add('animate-transform');
+            setTimeout(() => viewport.classList.remove('animate-transform'), 350);
+        } else {
+            viewport.classList.remove('animate-transform');
+        }
+
+        viewport.setAttribute('transform', `translate(${gState.panX}, ${gState.panY}) scale(${gState.scale})`);
+
+        const zoomEl = document.getElementById(svgElementId === 'live-conveyor-svg' ? 'graph-zoom-level' : 'pax-graph-zoom-level');
+        if (zoomEl) zoomEl.innerText = `${Math.round(gState.scale * 100)}%`;
+    }
+
+    function fitGraphToScreen(svgElementId) {
+        const svg = document.getElementById(svgElementId);
+        if (!svg) return;
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+        const wrapper = svg.closest('.conveyor-graph-wrapper');
+        if (!wrapper) return;
+
+        const layout = computeConveyorTopologyLayout(state.conveyorList, gState.spacingFactor, gState.customNodePositions);
+        const nodes = Object.values(layout);
+        if (nodes.length === 0) return;
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        nodes.forEach(n => {
+            if (n.x < minX) minX = n.x;
+            if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.y > maxY) maxY = n.y;
         });
+
+        const margin = 70;
+        const graphWidth = (maxX - minX) + margin * 2;
+        const graphHeight = (maxY - minY) + margin * 2;
+        const wrapperW = wrapper.clientWidth || 1000;
+        const wrapperH = wrapper.clientHeight || 560;
+
+        const scaleX = wrapperW / graphWidth;
+        const scaleY = wrapperH / graphHeight;
+        const fitScale = Math.min(Math.max(Math.min(scaleX, scaleY), 0.4), 1.5);
+
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+
+        gState.scale = parseFloat(fitScale.toFixed(2));
+        gState.panX = Math.round((wrapperW / 2) - centerX * gState.scale);
+        gState.panY = Math.round((wrapperH / 2) - centerY * gState.scale);
+
+        applyViewportTransform(svgElementId, true);
+    }
+
+    function centerGraph(svgElementId) {
+        const svg = document.getElementById(svgElementId);
+        if (!svg) return;
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+        const wrapper = svg.closest('.conveyor-graph-wrapper');
+        if (!wrapper) return;
+
+        const layout = computeConveyorTopologyLayout(state.conveyorList, gState.spacingFactor, gState.customNodePositions);
+        const nodes = Object.values(layout);
+        if (nodes.length === 0) return;
+
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        nodes.forEach(n => {
+            if (n.x < minX) minX = n.x;
+            if (n.x > maxX) maxX = n.x;
+            if (n.y < minY) minY = n.y;
+            if (n.y > maxY) maxY = n.y;
+        });
+
+        const wrapperW = wrapper.clientWidth || 1000;
+        const wrapperH = wrapper.clientHeight || 560;
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+
+        gState.panX = Math.round((wrapperW / 2) - centerX * gState.scale);
+        gState.panY = Math.round((wrapperH / 2) - centerY * gState.scale);
+
+        applyViewportTransform(svgElementId, true);
+    }
+
+    function autoArrangeGraph(svgElementId) {
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+
+        gState.customNodePositions = {};
+        gState.spacingFactor = 1.0;
+
+        const spacingEl = document.getElementById(svgElementId === 'live-conveyor-svg' ? 'graph-spacing-level' : 'pax-graph-spacing-level');
+        if (spacingEl) spacingEl.innerText = '1.0x';
+
+        if (svgElementId === 'live-conveyor-svg') {
+            renderLiveConveyorGraph();
+        } else if (svgElementId === 'passenger-conveyor-svg') {
+            if (state.activeTrackedBagId) renderPassengerLiveRoute(state.activeTrackedBagId, false);
+        }
+
+        fitGraphToScreen(svgElementId);
+        showToast('Conveyor network layout automatically optimized', 'success');
+    }
+
+    function resetGraphLayout(svgElementId) {
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+
+        gState.customNodePositions = {};
+        gState.spacingFactor = 1.0;
+
+        const spacingEl = document.getElementById(svgElementId === 'live-conveyor-svg' ? 'graph-spacing-level' : 'pax-graph-spacing-level');
+        if (spacingEl) spacingEl.innerText = '1.0x';
+
+        if (svgElementId === 'live-conveyor-svg') {
+            renderLiveConveyorGraph();
+        } else if (svgElementId === 'passenger-conveyor-svg') {
+            if (state.activeTrackedBagId) renderPassengerLiveRoute(state.activeTrackedBagId, false);
+        }
+
+        fitGraphToScreen(svgElementId);
+        showToast('Conveyor layout and zoom reset to defaults', 'info');
+    }
+
+    function zoomGraph(svgElementId, factor) {
+        const svg = document.getElementById(svgElementId);
+        if (!svg) return;
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+        const wrapper = svg.closest('.conveyor-graph-wrapper');
+        if (!wrapper) return;
+
+        const wrapperW = wrapper.clientWidth || 1000;
+        const wrapperH = wrapper.clientHeight || 560;
+        const centerX = wrapperW / 2;
+        const centerY = wrapperH / 2;
+
+        const oldScale = gState.scale;
+        const newScale = Math.min(Math.max(parseFloat((oldScale * factor).toFixed(2)), 0.35), 3.0);
+
+        gState.panX = Math.round(centerX - (centerX - gState.panX) * (newScale / oldScale));
+        gState.panY = Math.round(centerY - (centerY - gState.panY) * (newScale / oldScale));
+        gState.scale = newScale;
+
+        applyViewportTransform(svgElementId, true);
+    }
+
+    function adjustGraphSpacing(svgElementId, delta) {
+        const gState = state.graphState[svgElementId];
+        if (!gState) return;
+
+        gState.spacingFactor = Math.min(Math.max(parseFloat((gState.spacingFactor + delta).toFixed(1)), 0.7), 1.6);
+
+        const spacingEl = document.getElementById(svgElementId === 'live-conveyor-svg' ? 'graph-spacing-level' : 'pax-graph-spacing-level');
+        if (spacingEl) spacingEl.innerText = `${gState.spacingFactor.toFixed(1)}x`;
+
+        if (svgElementId === 'live-conveyor-svg') {
+            renderLiveConveyorGraph();
+        } else if (svgElementId === 'passenger-conveyor-svg') {
+            if (state.activeTrackedBagId) renderPassengerLiveRoute(state.activeTrackedBagId, false);
+        }
+    }
+
+    // ==================== NODE BAGGAGE INSPECTOR MODAL ====================
+
+    function openNodeBaggageInspector(nodeId, bags) {
+        const modal = document.getElementById('modal-node-baggage-inspector');
+        if (!modal) return;
+
+        const titleEl = document.getElementById('modal-node-inspector-title');
+        const subtitleEl = document.getElementById('modal-node-inspector-subtitle');
+        const tbody = document.getElementById('modal-node-inspector-body');
+
+        if (titleEl) titleEl.innerText = `Node Manifest: ${nodeId}`;
+        if (subtitleEl) subtitleEl.innerText = `${bags.length} bag(s) currently positioned at ${nodeId}`;
+
+        if (tbody) {
+            tbody.innerHTML = bags.map(b => `
+                <tr>
+                    <td><strong>${b.bagId}</strong></td>
+                    <td>${b.passengerName || 'Passenger'} <span class="subtext">(${b.passengerId || 'P-SELF'})</span></td>
+                    <td><span class="badge badge-outline">${b.flightId || 'Arrival'}</span></td>
+                    <td><code>${b.destinationNode || 'Carousel'}</code></td>
+                    <td>${getStatusBadge(b.status)}</td>
+                    <td>
+                        <button type="button" class="btn btn-xs btn-primary btn-inspect-track" data-bagid="${b.bagId}">Track Bag</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            tbody.querySelectorAll('.btn-inspect-track').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const bagId = btn.getAttribute('data-bagid');
+                    modal.style.display = 'none';
+                    selectBagForTracking(bagId);
+                });
+            });
+        }
+
+        modal.style.display = 'flex';
     }
 });

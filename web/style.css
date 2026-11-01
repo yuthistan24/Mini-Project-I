@@ -1092,34 +1092,128 @@ p, span, div {
 
 /* ==================== CONVEYOR NETWORK GRAPH ==================== */
 
+.graph-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.6rem 1rem;
+    padding: 0.5rem 0.75rem;
+    background: var(--bg-surface-alt);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    margin-bottom: 0.5rem;
+    font-size: 0.8rem;
+}
+
+.graph-toolbar-actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.graph-toolbar-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+}
+
+.toolbar-control-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+}
+
+.toolbar-label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.toolbar-value-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    height: 24px;
+    padding: 0 0.4rem;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.btn-icon-only {
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    font-weight: 700;
+    line-height: 1;
+}
+
 .conveyor-graph-wrapper {
     background-color: var(--graph-bg);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
-    padding: 0.5rem;
+    padding: 0;
     overflow: hidden;
     position: relative;
     box-shadow: inset 0 1px 3px rgba(0,0,0,0.03);
+    min-height: 520px;
+    height: 580px;
+    cursor: grab;
+    user-select: none;
+    touch-action: none;
+}
+
+.conveyor-graph-wrapper.is-panning {
+    cursor: grabbing;
 }
 
 .conveyor-graph-wrapper svg {
     width: 100%;
-    height: auto;
+    height: 100%;
     display: block;
+}
+
+.graph-viewport-layer {
+    will-change: transform;
+    transition: transform 0.05s ease-out;
+}
+
+.graph-viewport-layer.animate-transform {
+    transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* Conveyor Edges */
 .conveyor-edge {
     stroke: var(--graph-edge-default);
-    stroke-width: 2.2;
+    stroke-width: 2.4;
     fill: none;
     transition: stroke 0.25s ease, stroke-width 0.25s ease;
+}
+
+@keyframes flowingDash {
+    to {
+        stroke-dashoffset: -24;
+    }
 }
 
 .conveyor-edge.edge-route {
     stroke: #2563eb;
     stroke-width: 4.5;
     stroke-linecap: round;
+    stroke-dasharray: 8, 4;
+    animation: flowingDash 1.2s linear infinite;
 }
 
 .conveyor-edge.edge-route-completed {
@@ -1138,24 +1232,35 @@ p, span, div {
     fill: var(--graph-edge-bg);
     stroke: var(--graph-edge-border);
     stroke-width: 1;
-    rx: 3px;
+    rx: 4px;
+    filter: drop-shadow(0 1px 2px rgba(0,0,0,0.08));
 }
 
 .edge-weight-text {
     font-family: var(--font-mono);
-    font-size: 9.5px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 700;
     text-anchor: middle;
     dominant-baseline: central;
+    pointer-events: none;
 }
 
 /* Node Styling */
 .conveyor-node-group {
-    cursor: pointer;
+    cursor: grab;
+    user-select: none;
+}
+
+.conveyor-node-group.is-dragging {
+    cursor: grabbing;
+}
+
+.conveyor-node-group.is-dragging circle.node-circle {
+    filter: brightness(1.15) drop-shadow(0 8px 16px rgba(0,0,0,0.35));
 }
 
 .conveyor-node-group:hover circle.node-circle {
-    filter: brightness(1.1) drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+    filter: brightness(1.1) drop-shadow(0 3px 6px rgba(0,0,0,0.25));
 }
 
 .node-circle {
@@ -1172,8 +1277,27 @@ p, span, div {
 .node-circle.node-purple { fill: #7c3aed; }
 .node-circle.node-selected { stroke: #f59e0b; stroke-width: 5; }
 
+.node-pulse-ring {
+    fill: none;
+    stroke: #f59e0b;
+    stroke-width: 2.5;
+    animation: nodePulse 1.8s infinite ease-out;
+    pointer-events: none;
+}
+
+@keyframes nodePulse {
+    0% {
+        r: 24;
+        opacity: 0.9;
+    }
+    100% {
+        r: 38;
+        opacity: 0;
+    }
+}
+
 .node-label {
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
     fill: var(--graph-node-label);
     text-anchor: middle;
@@ -1182,7 +1306,7 @@ p, span, div {
 }
 
 .node-sublabel {
-    font-size: 8.5px;
+    font-size: 9px;
     font-weight: 500;
     fill: var(--graph-node-sublabel);
     text-anchor: middle;
@@ -1192,22 +1316,44 @@ p, span, div {
 /* Baggage Tag Pill Under Node */
 .node-bag-pill-group {
     cursor: pointer;
+    transition: transform 0.15s ease;
+}
+
+.node-bag-pill-group:hover {
+    transform: scale(1.05);
 }
 
 .node-bag-pill {
     fill: var(--graph-pill-bg);
-    rx: 3px;
-    transition: transform 0.15s ease;
+    rx: 4px;
+    stroke: var(--border-color);
+    stroke-width: 0.75;
+}
+
+.node-bag-pill.pill-selected {
+    fill: #2563eb;
+    stroke: #93c5fd;
+    stroke-width: 1.5;
+}
+
+.node-bag-pill.pill-multi {
+    fill: var(--bg-surface-alt);
+    stroke: var(--accent-primary);
+    stroke-width: 1.2;
 }
 
 .node-bag-pill-text {
     font-family: var(--font-mono);
-    font-size: 9px;
+    font-size: 9.5px;
     font-weight: 700;
     fill: var(--graph-pill-text);
     text-anchor: middle;
     dominant-baseline: central;
     pointer-events: none;
+}
+
+.node-bag-pill-text.text-multi {
+    fill: var(--text-primary);
 }
 
 /* Graph Legend */
