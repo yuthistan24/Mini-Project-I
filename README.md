@@ -315,6 +315,4 @@ Run it using the platform-specific command in [Build and run](#build-and-run). T
 | SQLite driver error | Confirm `lib/sqlite-jdbc.jar` is present and included with `-cp "lib/*"`. |
 | Redis connection message | Redis is optional. Check `REDIS_HOST` and `REDIS_PORT`, or continue without Redis. |
 | Login fails | Confirm the account exists in the active database snapshot. The first-admin setup is available only when there is no active administrator. |
-| Reset removed logins | The clean reset removes all users; create a new first administrator through the Account Setup Portal. |  
-
-
+| Reset removed logins | The clean reset removes all users; create a new first administrator through the Account Setup Portal. |
