@@ -1,6 +1,6 @@
 import java.util.*;
 
-public class BaggageService {
+public final class BaggageService {
     private HashMap<String, Flight> flights;
     private HashMap<String, LoadingBay> bays;
     private HashMap<String, Passenger> passengers;
@@ -11,11 +11,13 @@ public class BaggageService {
     private ConveyorRoutePlanner conveyorPlanner;
 
     private int simulatedTime; // Minutes from midnight (e.g. 540 = 09:00 AM)
-    private AuthManager auth;
+
+    public BaggageService() {
+        this(null);
+    }
 
     public BaggageService(AuthManager auth) {
         this.simulatedTime = 540; // 09:00 AM
-        this.auth = auth;
 
         flights = new HashMap<>();
         bays = new HashMap<>();
@@ -71,28 +73,32 @@ public class BaggageService {
         processQueue = new PriorityQueue<>(baggageComparator);
 
         DatabaseManager.initializeDatabase();
+        DatabaseManager.seedInitialDataIfEmpty();
 
-        // Initialize standard conveyor topology
-        conveyorPlanner.initializeNetwork();
-        if (DatabaseManager.hasData("ConveyorSegment")) {
-            DatabaseManager.loadConveyors(conveyorPlanner);
-        }
+        loadFromDatabase();
+    }
 
-        // Initialize standard bays
-        bays.put("BAY-A", new LoadingBay("BAY-A"));
-        bays.put("BAY-B", new LoadingBay("BAY-B"));
-        bays.put("BAY-C", new LoadingBay("BAY-C"));
-        bays.put("BAY-D", new LoadingBay("BAY-D"));
+    /**
+     * Loads all runtime operational state directly from the persistent SQLite database.
+     * Reconstructs bays, conveyors, flights, passengers, baggage, route paths, urgencies
+     * and priority queues without relying on hardcoded Java objects.
+     */
+    public final void loadFromDatabase() {
+        bays.clear();
+        DatabaseManager.loadLoadingBays(this);
 
-        // Initialize clean demonstration dataset ONLY if database tables are empty
-        if (!DatabaseManager.hasData("Flight") || !DatabaseManager.hasData("Passenger") || !DatabaseManager.hasData("Baggage")) {
-            initializeCleanSampleData();
-        } else {
-            DatabaseManager.loadFlights(this);
-            loadPassengersFromDB();
-            DatabaseManager.loadBaggage(this);
-            DatabaseManager.validateAndRepairBaggageRecords(this);
-        }
+        conveyorPlanner.clear();
+        DatabaseManager.loadConveyors(conveyorPlanner);
+
+        flights.clear();
+        DatabaseManager.loadFlights(this);
+
+        passengers.clear();
+        loadPassengersFromDB();
+
+        allBaggage.clear();
+        DatabaseManager.loadBaggage(this);
+        DatabaseManager.validateAndRepairBaggageRecords(this);
 
         refreshUrgencies();
         rebuildProcessQueue();
@@ -107,7 +113,6 @@ public class BaggageService {
     public Map<String, Passenger> getAllPassengers() { return passengers; }
     public Map<String, Baggage> getAllBaggage() { return allBaggage; }
     public ConveyorRoutePlanner getConveyorPlanner() { return conveyorPlanner; }
-    public AuthManager getAuth() { return auth; }
     public ArrayDeque<Baggage> getConveyorWaitingQueue() { return conveyorWaitingQueue; }
 
     /**
@@ -123,12 +128,15 @@ public class BaggageService {
     /**
      * PriorityQueue does not automatically re-heap after a bag's cutoff or
      * urgency changes, so rebuild the queue from the authoritative bag map.
+     * Also rebuilds the FIFO conveyor entry waiting queue.
      */
     public void rebuildProcessQueue() {
         processQueue.clear();
+        conveyorWaitingQueue.clear();
         for (Baggage bag : allBaggage.values()) {
             if (bag.getStatus() == BaggageStatus.QUEUED) {
                 processQueue.add(bag);
+                conveyorWaitingQueue.addLast(bag);
             }
         }
     }
@@ -173,211 +181,9 @@ public class BaggageService {
         }
     }
 
-    // ==================== CLEAN DEMONSTRATION DATASET ====================
-
     public void initializeCleanSampleData() {
-        flights.clear();
-        bays.get("BAY-A").setAssignedFlight(null);
-        bays.get("BAY-B").setAssignedFlight(null);
-        bays.get("BAY-C").setAssignedFlight(null);
-        bays.get("BAY-D").setAssignedFlight(null);
-        passengers.clear();
-        allBaggage.clear();
-        processQueue.clear();
-
-        // 1. Four consistently defined flights covering Tamil Nadu, Indian hubs, and international routes
-        Flight f101 = new Flight("AI101", "MAA", "Delhi (DEL) via Madurai (IXM)", 660, 630);    // Dep 11:00 AM, Cutoff 10:30 AM
-        Flight f202 = new Flight("6E202", "MAA", "Mumbai (BOM) via Coimbatore (CJB)", 645, 615); // Dep 10:45 AM, Cutoff 10:15 AM
-        Flight f303 = new Flight("SG303", "MAA", "Bengaluru (BLR) / Tiruchirappalli (TRZ)", 675, 645);// Dep 11:15 AM, Cutoff 10:45 AM
-        Flight f404 = new Flight("UK404", "MAA", "Dubai (DXB) / Singapore (SIN)", 650, 620);    // Dep 10:50 AM, Cutoff 10:20 AM
-
-        flights.put(f101.getFlightId(), f101);
-        flights.put(f202.getFlightId(), f202);
-        flights.put(f303.getFlightId(), f303);
-        flights.put(f404.getFlightId(), f404);
-
-        bays.get("BAY-A").setAssignedFlight(f101);
-        bays.get("BAY-B").setAssignedFlight(f202);
-        bays.get("BAY-C").setAssignedFlight(f303);
-        bays.get("BAY-D").setAssignedFlight(f404);
-
-        f101.setAssignedBay(bays.get("BAY-A"));
-        f202.setAssignedBay(bays.get("BAY-B"));
-        f303.setAssignedBay(bays.get("BAY-C"));
-        f404.setAssignedBay(bays.get("BAY-D"));
-
-        DatabaseManager.saveFlight(f101);
-        DatabaseManager.saveFlight(f202);
-        DatabaseManager.saveFlight(f303);
-        DatabaseManager.saveFlight(f404);
-        DatabaseManager.saveLoadingBay(bays.get("BAY-A"));
-        DatabaseManager.saveLoadingBay(bays.get("BAY-B"));
-        DatabaseManager.saveLoadingBay(bays.get("BAY-C"));
-        DatabaseManager.saveLoadingBay(bays.get("BAY-D"));
-
-        // 2. Realistic passengers
-        Passenger[] samplePassengers = {
-            new Passenger("P101", "Ramesh Kumar", "ramesh", "AI101", PassengerCategory.BUSINESS, "ramesh.k@example.com"),
-            new Passenger("P102", "Priya Sharma", "priya", "6E202", PassengerCategory.FIRST_CLASS, "priya.s@example.com"),
-            new Passenger("P103", "Rajesh Patel", "rajesh", "SG303", PassengerCategory.ECONOMY, "rajesh.p@example.com"),
-            new Passenger("P104", "Ananya Iyer", "ananya", "UK404", PassengerCategory.BUSINESS, "ananya.i@example.com"),
-            new Passenger("P105", "Vikram Singh", "vikram", "AI101", PassengerCategory.ECONOMY, "vikram.s@example.com"),
-            new Passenger("P106", "Meera Nair", "meera", "6E202", PassengerCategory.ECONOMY, "meera.n@example.com"),
-            new Passenger("P107", "Arun Verma", "arun", "SG303", PassengerCategory.BUSINESS, "arun.v@example.com"),
-            new Passenger("P108", "Sneha Reddy", "sneha", "UK404", PassengerCategory.FIRST_CLASS, "sneha.r@example.com"),
-            new Passenger("P109", "Karthik Raman", "karthik", "AI101", PassengerCategory.ECONOMY, "karthik.r@example.com"),
-            new Passenger("P110", "Divya Krishnan", "divya", "6E202", PassengerCategory.ECONOMY, "divya.k@example.com"),
-            new Passenger("P111", "David Miller", "david", "AI101", PassengerCategory.BUSINESS, "david.m@example.com"),
-            new Passenger("P112", "Fatima Al-Sayed", "fatima", "UK404", PassengerCategory.FIRST_CLASS, "fatima.a@example.com")
-        };
-
-        for (Passenger p : samplePassengers) {
-            passengers.put(p.getPassengerId(), p);
-            DatabaseManager.savePassenger(p);
-        }
-
-        // 3. User account creation uses the administrator setup and registration process.
-        // Hardcoded demo accounts with known passwords are not created automatically.
-
-        // 4. Realistic synthetic baseline baggage records (32 unique records across workflows)
-        // Multi-bag example 1: Ramesh Kumar (P101) has 4 bags
-        createSampleBag("BAG-101", "P101", "Ramesh Kumar", BaggageDirection.OUTGOING, f101, PassengerCategory.BUSINESS, 1,
-                "CHECK-IN", "BAY-A", false, "", BaggageStatus.AWAITING_CLEARANCE);
-        createSampleBag("BAG-102", "P101", "Ramesh Kumar", BaggageDirection.OUTGOING, f101, PassengerCategory.BUSINESS, 2,
-                "CHECK-IN", "BAY-A", true, "Screening cleared (Security Hub)", BaggageStatus.QUEUED);
-        createSampleBag("BAG-122", "P101", "Ramesh Kumar", BaggageDirection.OUTGOING, f101, PassengerCategory.BUSINESS, 3,
-                "BAY-A", "BAY-A", true, "Screening cleared", BaggageStatus.LOADED);
-        createSampleBag("BAG-131", "P101", "Ramesh Kumar", BaggageDirection.OUTGOING, f101, PassengerCategory.BUSINESS, 4,
-                "SORTING", "BAY-A", true, "Screening cleared", BaggageStatus.IN_TRANSIT);
-
-        // Multi-bag example 2: Priya Sharma (P102) has 3 bags
-        createSampleBag("BAG-103", "P102", "Priya Sharma", BaggageDirection.OUTGOING, f202, PassengerCategory.FIRST_CLASS, 5,
-                "CENTRAL", "BAY-B", true, "Priority screening cleared", BaggageStatus.IN_TRANSIT);
-        createSampleBag("BAG-104", "P102", "Priya Sharma", BaggageDirection.OUTGOING, f202, PassengerCategory.FIRST_CLASS, 6,
-                "BAY-B", "BAY-B", true, "Priority screening cleared", BaggageStatus.LOADED);
-        createSampleBag("BAG-123", "P102", "Priya Sharma", BaggageDirection.OUTGOING, f202, PassengerCategory.FIRST_CLASS, 7,
-                "CHECK-IN", "BAY-B", true, "Priority screening cleared", BaggageStatus.QUEUED);
-
-        // Multi-bag example 3: Rajesh Patel (P103) has 2 bags (including a missed-cutoff demonstration)
-        createSampleBag("BAG-105", "P103", "Rajesh Patel", BaggageDirection.OUTGOING, f303, PassengerCategory.ECONOMY, 8,
-                "CHECK-IN", "BAY-C", false, "", BaggageStatus.AWAITING_CLEARANCE);
-        Baggage missedBag = createSampleBag("BAG-120", "P103", "Rajesh Patel", BaggageDirection.OUTGOING, f202, PassengerCategory.ECONOMY, 9,
-                "CHECK-IN", "BAY-B", true, "Screening cleared", BaggageStatus.MISSED_CUTOFF);
-        missedBag.setLoadingCutoff(530); // 08:50 AM cutoff, arrived after cutoff at 09:00 AM
-
-        // Multi-bag example 4: Ananya Iyer (P104) has 3 bags
-        createSampleBag("BAG-106", "P104", "Ananya Iyer", BaggageDirection.OUTGOING, f404, PassengerCategory.BUSINESS, 10,
-                "CHECK-IN", "BAY-D", true, "Screening verified", BaggageStatus.QUEUED);
-        createSampleBag("BAG-124", "P104", "Ananya Iyer", BaggageDirection.OUTGOING, f404, PassengerCategory.BUSINESS, 11,
-                "BAY-D", "BAY-D", true, "Screening verified", BaggageStatus.LOADED);
-        createSampleBag("BAG-132", "P104", "Ananya Iyer", BaggageDirection.OUTGOING, f404, PassengerCategory.BUSINESS, 12,
-                "CHECK-IN", "BAY-D", false, "", BaggageStatus.AWAITING_CLEARANCE);
-
-        // Multi-bag example 5: Vikram Singh (P105) has 3 bags (Outbound & Inbound combination)
-        createSampleBag("BAG-107", "P105", "Vikram Singh", BaggageDirection.OUTGOING, f101, PassengerCategory.ECONOMY, 13,
-                "CHECK-IN", "BAY-A", true, "Screening verified", BaggageStatus.QUEUED);
-        createSampleBag("BAG-116", "P105", "Vikram Singh", BaggageDirection.INCOMING, null, PassengerCategory.ECONOMY, 14,
-                "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-1", true, "Inbound flight baggage", BaggageStatus.AT_COLLECTION_POINT);
-        createSampleBag("BAG-125", "P105", "Vikram Singh", BaggageDirection.OUTGOING, f101, PassengerCategory.ECONOMY, 15,
-                "BAY-AREA", "BAY-A", true, "Screening verified", BaggageStatus.IN_TRANSIT);
-
-        // Multi-bag example 6: Meera Nair (P106) has 2 bags
-        createSampleBag("BAG-108", "P106", "Meera Nair", BaggageDirection.OUTGOING, f202, PassengerCategory.ECONOMY, 16,
-                "CHECK-IN", "BAY-B", false, "", BaggageStatus.AWAITING_CLEARANCE);
-        createSampleBag("BAG-117", "P106", "Meera Nair", BaggageDirection.INCOMING, null, PassengerCategory.ECONOMY, 17,
-                "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-1", true, "Inbound flight baggage", BaggageStatus.COLLECTED);
-
-        // Multi-bag example 7: Arun Verma (P107) has 2 bags (Outbound & Transfer)
-        createSampleBag("BAG-109", "P107", "Arun Verma", BaggageDirection.OUTGOING, f303, PassengerCategory.BUSINESS, 18,
-                "BAY-AREA", "BAY-C", true, "Screening cleared", BaggageStatus.IN_TRANSIT);
-        createSampleBag("BAG-118", "P107", "Arun Verma", BaggageDirection.TRANSFER, f101, PassengerCategory.BUSINESS, 19,
-                "TRANSFER-A", "BAY-A", true, "Transit security approved", BaggageStatus.QUEUED);
-
-        // Multi-bag example 8: Sneha Reddy (P108) has 3 bags
-        createSampleBag("BAG-110", "P108", "Sneha Reddy", BaggageDirection.OUTGOING, f404, PassengerCategory.FIRST_CLASS, 20,
-                "CHECK-IN", "BAY-D", true, "VIP screening cleared", BaggageStatus.QUEUED);
-        createSampleBag("BAG-111", "P108", "Sneha Reddy", BaggageDirection.OUTGOING, f404, PassengerCategory.FIRST_CLASS, 21,
-                "BAY-D", "BAY-D", true, "VIP screening cleared", BaggageStatus.LOADED);
-        createSampleBag("BAG-126", "P108", "Sneha Reddy", BaggageDirection.OUTGOING, f404, PassengerCategory.FIRST_CLASS, 22,
-                "CENTRAL", "BAY-D", true, "VIP screening cleared", BaggageStatus.IN_TRANSIT);
-
-        // Multi-bag example 9: Karthik Raman (P109) has 3 bags (including security rejection example)
-        createSampleBag("BAG-112", "P109", "Karthik Raman", BaggageDirection.OUTGOING, f101, PassengerCategory.ECONOMY, 23,
-                "CHECK-IN", "BAY-A", false, "", BaggageStatus.AWAITING_CLEARANCE);
-        createSampleBag("BAG-121", "P109", "Karthik Raman", BaggageDirection.OUTGOING, f303, PassengerCategory.ECONOMY, 24,
-                "CHECK-IN", "BAY-C", false, "Prohibited lithium battery pack detected in X-ray screening", BaggageStatus.REJECTED);
-        createSampleBag("BAG-127", "P109", "Karthik Raman", BaggageDirection.OUTGOING, f101, PassengerCategory.ECONOMY, 25,
-                "CHECK-IN", "BAY-A", true, "Screening cleared", BaggageStatus.QUEUED);
-
-        // Multi-bag example 10: Divya Krishnan (P110) has 2 bags
-        createSampleBag("BAG-113", "P110", "Divya Krishnan", BaggageDirection.OUTGOING, f202, PassengerCategory.ECONOMY, 26,
-                "BAY-B", "BAY-B", true, "Screening cleared", BaggageStatus.LOADED);
-        createSampleBag("BAG-128", "P110", "Divya Krishnan", BaggageDirection.OUTGOING, f202, PassengerCategory.ECONOMY, 27,
-                "CHECK-IN", "BAY-B", true, "Screening cleared", BaggageStatus.QUEUED);
-
-        // Multi-bag example 11: David Miller (P111) has 3 incoming bags
-        createSampleBag("BAG-114", "P111", "David Miller", BaggageDirection.INCOMING, null, PassengerCategory.BUSINESS, 28,
-                "UNLOAD-POINT", "CLAIM-CAROUSEL-1", true, "Inbound flight baggage", BaggageStatus.QUEUED);
-        createSampleBag("BAG-119", "P111", "David Miller", BaggageDirection.INCOMING, null, PassengerCategory.BUSINESS, 29,
-                "CENTRAL", "CLAIM-CAROUSEL-2", true, "Inbound flight baggage", BaggageStatus.IN_TRANSIT);
-        createSampleBag("BAG-129", "P111", "David Miller", BaggageDirection.INCOMING, null, PassengerCategory.BUSINESS, 30,
-                "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-1", true, "Inbound flight baggage", BaggageStatus.AT_COLLECTION_POINT);
-
-        // Multi-bag example 12: Fatima Al-Sayed (P112) has 2 transfer bags
-        createSampleBag("BAG-115", "P112", "Fatima Al-Sayed", BaggageDirection.TRANSFER, f404, PassengerCategory.FIRST_CLASS, 31,
-                "TRANSFER-A", "BAY-D", true, "Transit security approved", BaggageStatus.QUEUED);
-        createSampleBag("BAG-130", "P112", "Fatima Al-Sayed", BaggageDirection.TRANSFER, f404, PassengerCategory.FIRST_CLASS, 32,
-                "BAY-D", "BAY-D", true, "Transit security approved", BaggageStatus.LOADED);
-
-        DatabaseManager.logAudit("SYSTEM", "INITIALIZE_SAMPLE_DATA", "System", simulatedTime, "SUCCESS", "32-record demonstration dataset created");
-        RedisCache.invalidateAll();
-        refreshUrgencies();
-        rebuildProcessQueue();
-    }
-
-    private Baggage createSampleBag(String bagId, String pId, String pName, BaggageDirection dir, Flight flight,
-                                   PassengerCategory cat, int arrOrder, String currentLoc, String destNode,
-                                   boolean cleared, String clearanceReason, BaggageStatus status) {
-        Baggage bag;
-        if (dir == BaggageDirection.INCOMING) {
-            bag = new IncomingBag(bagId, pId, pName, cat, arrOrder);
-        } else if (dir == BaggageDirection.TRANSFER) {
-            bag = new TransferBag(bagId, pId, pName, cat, arrOrder);
-        } else {
-            bag = new OriginBag(bagId, pId, pName, cat, arrOrder);
-        }
-
-        if (flight != null) {
-            bag.assignFlight(flight);
-        } else if (dir == BaggageDirection.INCOMING) {
-            bag.setDestinationNode("CLAIM-CAROUSEL-1");
-            bag.setOriginAirport("DXB");
-            bag.setDestinationAirport("MAA");
-        }
-
-        bag.setCurrentLocation(currentLoc);
-        bag.setDestinationNode(destNode);
-        bag.setClearance(cleared, clearanceReason);
-        bag.setStatus(status);
-        // Deterministic stagger so the demo dataset exercises waiting-delay memberships.
-        bag.setQueuedSince(Math.max(0, simulatedTime - ((arrOrder % 4) * 5)));
-
-        // Calculate initial route & ETA
-        if (destNode != null && !destNode.isEmpty()) {
-            RoutingResult res = conveyorPlanner.getShortestPath(currentLoc, destNode);
-            if (res != null) {
-                bag.setCurrentRoute(res.route);
-                bag.setEstimatedTime(res.totalTime);
-            }
-        }
-
-        allBaggage.put(bagId, bag);
-        if (status == BaggageStatus.QUEUED) {
-            processQueue.add(bag);
-            enqueueConveyorWaiting(bag);
-        }
-        DatabaseManager.saveBaggage(bag);
-        return bag;
+        DatabaseManager.seedInitialDataIfEmpty(this);
+        loadFromDatabase();
     }
 
     public int getSimulatedTime() { return simulatedTime; }
@@ -431,7 +237,6 @@ public class BaggageService {
             newBag.setDestinationAirport("MAA");
             newBag.setDestinationNode(destNode != null && !destNode.isEmpty() ? destNode : "CLAIM-CAROUSEL-1");
             newBag.setClearance(true, "Inbound flight baggage");
-            processQueue.add(newBag);
         } else if (direction == BaggageDirection.TRANSFER) {
             newBag = new TransferBag(bagId, passengerId, passengerName, cat, order);
             newBag.setOriginAirport(originAirport != null ? originAirport : "DEL");
@@ -957,6 +762,7 @@ public class BaggageService {
         stats.put("exceptions", exceptions);
         stats.put("flightCount", flights.size());
         stats.put("passengerCount", passengers.size());
+        stats.put("conveyorWaitingCount", conveyorWaitingQueue.size());
         stats.put("availableConveyors", availableConveyors);
         stats.put("totalConveyors", totalConveyors);
         stats.put("simulatedTime", simulatedTime);
@@ -971,6 +777,10 @@ class ConveyorRoutePlanner {
 
     public ConveyorRoutePlanner() {
         adjacencyList = new HashMap<>();
+    }
+
+    public void clear() {
+        adjacencyList.clear();
     }
 
     public HashMap<String, ArrayList<ConveyorSegment>> getAdjacencyList() {
@@ -993,43 +803,6 @@ class ConveyorRoutePlanner {
             segment.setAvailable(available);
             adjacencyList.get(from).add(segment);
         }
-    }
-
-    public void initializeNetwork() {
-        String[] nodes = {
-            "CHECK-IN", "SORTING", "TRANSFER-A", "TRANSFER-B",
-            "CENTRAL", "BAY-AREA", "BAY-A", "BAY-B", "BAY-C", "BAY-D",
-            "UNLOAD-POINT", "CLAIM-AREA", "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-2"
-        };
-        for (String node : nodes) {
-            adjacencyList.putIfAbsent(node, new ArrayList<>());
-        }
-
-        // Outbound & Core conveyor paths
-        addSegment("CHECK-IN", "SORTING", 4);
-        addSegment("SORTING", "TRANSFER-A", 5);
-        addSegment("SORTING", "TRANSFER-B", 6);
-        addSegment("SORTING", "CENTRAL", 7);
-        addSegment("TRANSFER-A", "CENTRAL", 4);
-        addSegment("TRANSFER-B", "CENTRAL", 3);
-        addSegment("CENTRAL", "BAY-AREA", 5);
-        addSegment("BAY-AREA", "BAY-A", 3);
-        addSegment("BAY-AREA", "BAY-B", 4);
-        addSegment("BAY-AREA", "BAY-C", 3);
-        addSegment("BAY-AREA", "BAY-D", 5);
-
-        // Inbound & Claim conveyor paths (Two-way operations)
-        addSegment("UNLOAD-POINT", "CENTRAL", 5);
-        addSegment("CENTRAL", "CLAIM-AREA", 4);
-        addSegment("CLAIM-AREA", "CLAIM-CAROUSEL-1", 3);
-        addSegment("CLAIM-AREA", "CLAIM-CAROUSEL-2", 4);
-        addSegment("UNLOAD-POINT", "TRANSFER-A", 6);
-    }
-
-    private void addSegment(String from, String to, int time) {
-        ConveyorSegment segment = new ConveyorSegment(from, to, time);
-        adjacencyList.get(from).add(segment);
-        DatabaseManager.saveConveyorSegment(segment);
     }
 
     public List<ConveyorSegment> getAllSegments() {

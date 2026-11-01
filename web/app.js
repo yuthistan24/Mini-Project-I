@@ -45,7 +45,6 @@ document.addEventListener('DOMContentLoaded', () => {
     setupBaggageListeners();
     setupPassengerListeners();
     setupFlightListeners();
-    setupConveyorListeners();
     setupSecurityListeners();
     setupUserManagementListeners();
     setupSimulatedClock();
@@ -73,6 +72,7 @@ document.addEventListener('DOMContentLoaded', () => {
         state.clearanceAuthority = !!data.clearanceAuthority;
         state.linkedPassengerId = data.linkedPassengerId || null;
         state.passengerName = data.passengerName || data.username;
+        state.passengerFlight = data.flightId || '';
 
         document.getElementById('current-user-name').innerText = state.passengerName || state.currentUser;
         document.getElementById('current-user-role').innerText = state.currentRole;
@@ -115,6 +115,10 @@ document.addEventListener('DOMContentLoaded', () => {
             // Populate passenger banner details
             document.getElementById('passenger-banner-name').innerText = `Welcome, ${state.passengerName}`;
             document.getElementById('passenger-banner-id').innerText = state.linkedPassengerId || 'P-SELF';
+            const flightEl = document.getElementById('passenger-banner-flight');
+            if (flightEl && state.passengerFlight) {
+                flightEl.innerText = state.passengerFlight;
+            }
         } else {
             if (navPassenger) navPassenger.style.display = 'none';
             if (navTracking) navTracking.style.display = 'block';
@@ -680,16 +684,22 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `).join('');
 
+        const activeFlight = state.passengerFlight || (state.baggageList.find(b => b.flightId) || {}).flightId;
+        const flightEl = document.getElementById('passenger-banner-flight');
+        if (flightEl && activeFlight) {
+            flightEl.innerText = activeFlight;
+        }
+
         container.querySelectorAll('.btn-passenger-track').forEach(btn => {
             btn.addEventListener('click', () => {
                 const bagId = btn.getAttribute('data-id');
-                renderPassengerLiveRoute(bagId);
+                renderPassengerLiveRoute(bagId, false);
             });
         });
 
         // Automatically display first bag route if available
         if (state.baggageList.length > 0 && !state.activeTrackedBagId) {
-            renderPassengerLiveRoute(state.baggageList[0].bagId);
+            renderPassengerLiveRoute(state.baggageList[0].bagId, true);
         }
     }
 
@@ -715,13 +725,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Render Passenger Live Tracking Embedded Pathway
-    async function renderPassengerLiveRoute(bagId) {
+    async function renderPassengerLiveRoute(bagId, isBackgroundRefresh = false) {
         const feedbackEl = document.getElementById('passenger-track-feedback');
         const panel = document.getElementById('passenger-live-tracking-panel');
         if (!panel) return;
 
         if (!bagId || !bagId.trim()) {
-            if (feedbackEl) {
+            if (feedbackEl && !isBackgroundRefresh) {
                 feedbackEl.style.display = 'block';
                 feedbackEl.style.backgroundColor = '#fee2e2';
                 feedbackEl.style.color = '#991b1b';
@@ -737,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const res = await fetch(`/api/baggage/track?id=${encodeURIComponent(normalizedTag)}`);
             if (res.ok) {
                 const b = await res.json();
-                if (feedbackEl) {
+                if (feedbackEl && !isBackgroundRefresh) {
                     feedbackEl.style.display = 'block';
                     feedbackEl.style.backgroundColor = '#dcfce7';
                     feedbackEl.style.color = '#166534';
@@ -788,24 +798,26 @@ document.addEventListener('DOMContentLoaded', () => {
                 renderVisualPathway('passenger-visual-route', b);
                 renderConveyorNetworkSvg('passenger-conveyor-svg', state.baggageList, state.conveyorList, b);
 
-                // Scroll smoothly into view
-                panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                // Scroll smoothly into view only on explicit user request
+                if (!isBackgroundRefresh) {
+                    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                }
             } else if (res.status === 404) {
-                if (feedbackEl) {
+                if (feedbackEl && !isBackgroundRefresh) {
                     feedbackEl.style.display = 'block';
                     feedbackEl.style.backgroundColor = '#fee2e2';
                     feedbackEl.style.color = '#991b1b';
                     feedbackEl.innerText = `No baggage found with this tag ID: ${normalizedTag}`;
                 }
             } else if (res.status === 403) {
-                if (feedbackEl) {
+                if (feedbackEl && !isBackgroundRefresh) {
                     feedbackEl.style.display = 'block';
                     feedbackEl.style.backgroundColor = '#fef3c7';
                     feedbackEl.style.color = '#92400e';
                     feedbackEl.innerText = `Access restricted: Baggage ${normalizedTag} is registered to another passenger account.`;
                 }
             } else {
-                if (feedbackEl) {
+                if (feedbackEl && !isBackgroundRefresh) {
                     feedbackEl.style.display = 'block';
                     feedbackEl.style.backgroundColor = '#fee2e2';
                     feedbackEl.style.color = '#991b1b';
@@ -814,7 +826,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         } catch (e) {
             console.error('Error fetching passenger route', e);
-            if (feedbackEl) {
+            if (feedbackEl && !isBackgroundRefresh) {
                 feedbackEl.style.display = 'block';
                 feedbackEl.style.backgroundColor = '#fee2e2';
                 feedbackEl.style.color = '#991b1b';
@@ -1193,15 +1205,6 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         });
 
-        // Search Input
-        const searchInput = document.getElementById('baggage-search-input');
-        if (searchInput) {
-            searchInput.addEventListener('input', (e) => {
-                state.searchQuery = e.target.value.trim();
-                renderBaggageTable();
-            });
-        }
-
         const refreshBtn = document.getElementById('baggage-refresh-btn');
         if (refreshBtn) refreshBtn.addEventListener('click', () => loadBaggage());
 
@@ -1546,8 +1549,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const newPFlight = document.getElementById('new-p-flight');
         if (newPFlight) newPFlight.innerHTML = flightOptions;
     }
-
-    function setupConveyorListeners() {}
 
     // ==================== USER MANAGEMENT (ADMIN) ====================
 
@@ -1955,7 +1956,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (state.currentView === 'passenger-portal') {
                 renderPassengerBags();
                 if (state.activeTrackedBagId) {
-                    renderPassengerLiveRoute(state.activeTrackedBagId);
+                    renderPassengerLiveRoute(state.activeTrackedBagId, true);
                 }
             }
         } catch (e) {
@@ -2292,8 +2293,12 @@ document.addEventListener('DOMContentLoaded', () => {
             grp.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const bagId = grp.getAttribute('data-bagid');
-                if (bagId && svgElementId === 'live-conveyor-svg') {
-                    selectBagForTracking(bagId);
+                if (bagId) {
+                    if (svgElementId === 'live-conveyor-svg') {
+                        selectBagForTracking(bagId);
+                    } else if (svgElementId === 'passenger-conveyor-svg') {
+                        renderPassengerLiveRoute(bagId, false);
+                    }
                 }
             });
         });
@@ -2302,8 +2307,12 @@ document.addEventListener('DOMContentLoaded', () => {
             grp.addEventListener('click', () => {
                 const nodeId = grp.getAttribute('data-node');
                 const bags = bagsByLoc[nodeId] || [];
-                if (bags.length > 0 && svgElementId === 'live-conveyor-svg') {
-                    selectBagForTracking(bags[0].bagId);
+                if (bags.length > 0) {
+                    if (svgElementId === 'live-conveyor-svg') {
+                        selectBagForTracking(bags[0].bagId);
+                    } else if (svgElementId === 'passenger-conveyor-svg') {
+                        renderPassengerLiveRoute(bags[0].bagId, false);
+                    }
                 }
             });
         });

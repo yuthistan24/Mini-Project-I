@@ -209,16 +209,21 @@ public class Main {
 
                 String passengerId = user.getLinkedPassengerId() != null ? user.getLinkedPassengerId() : "";
                 String passengerName = "";
+                String flightId = "";
                 if (!passengerId.isEmpty()) {
                     Passenger p = baggageService.getPassenger(passengerId);
-                    if (p != null) passengerName = p.getFullName();
+                    if (p != null) {
+                        passengerName = p.getFullName();
+                        flightId = p.getFlightId() != null ? p.getFlightId() : "";
+                    }
                 }
 
                 sendResponse(exchange, 200, "{\"username\":\"" + escapeJson(user.getUsername()) +
                         "\", \"role\":\"" + user.getRole() +
                         "\", \"clearanceAuthority\":" + user.hasClearanceAuthority() +
                         ", \"linkedPassengerId\":\"" + escapeJson(passengerId) +
-                        "\", \"passengerName\":\"" + escapeJson(passengerName) + "\"}");
+                        "\", \"passengerName\":\"" + escapeJson(passengerName) +
+                        "\", \"flightId\":\"" + escapeJson(flightId) + "\"}");
             } else {
                 DatabaseManager.logAudit(username, "LOGIN", "System", baggageService.getSimulatedTime(), "FAILED", "Invalid credentials or inactive account");
                 sendResponse(exchange, 401, "{\"error\": \"Invalid username or password, or account is deactivated.\"}");
@@ -255,9 +260,13 @@ public class Main {
 
             String passengerId = user.getLinkedPassengerId() != null ? user.getLinkedPassengerId() : "";
             String passengerName = "";
+            String flightId = "";
             if (!passengerId.isEmpty()) {
                 Passenger p = baggageService.getPassenger(passengerId);
-                if (p != null) passengerName = p.getFullName();
+                if (p != null) {
+                    passengerName = p.getFullName();
+                    flightId = p.getFlightId() != null ? p.getFlightId() : "";
+                }
             }
 
             sendResponse(exchange, 200, "{\"username\":\"" + escapeJson(user.getUsername()) +
@@ -265,6 +274,7 @@ public class Main {
                     "\", \"clearanceAuthority\":" + user.hasClearanceAuthority() +
                     ", \"linkedPassengerId\":\"" + escapeJson(passengerId) +
                     "\", \"passengerName\":\"" + escapeJson(passengerName) +
+                    "\", \"flightId\":\"" + escapeJson(flightId) +
                     "\", \"active\":" + user.isActive() + "}");
         }
     }
