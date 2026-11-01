@@ -313,28 +313,6 @@ public class DatabaseManager {
         return null;
     }
 
-    public static Passenger getPassengerByUsername(String username) {
-        if (username == null) return null;
-        String sql = "SELECT * FROM Passenger WHERE username = ?";
-        try (Connection conn = connect(); PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, username);
-            ResultSet rs = pstmt.executeQuery();
-            if (rs.next()) {
-                return new Passenger(
-                    rs.getString("passengerId"),
-                    rs.getString("fullName"),
-                    rs.getString("username"),
-                    rs.getString("flightId"),
-                    PassengerCategory.fromRank(rs.getInt("categoryRank")),
-                    rs.getString("contactInfo")
-                );
-            }
-        } catch (SQLException e) {
-            System.err.println("Error fetching passenger by username: " + e.getMessage());
-        }
-        return null;
-    }
-
     public static List<Passenger> getAllPassengers() {
         List<Passenger> list = new ArrayList<>();
         String sql = "SELECT * FROM Passenger ORDER BY passengerId ASC";
@@ -429,7 +407,6 @@ public class DatabaseManager {
                 bag.setDestinationAirport(destAirport);
                 bag.setCurrentLocation(currentLoc);
                 bag.setEstimatedTime(estTime);
-                bag.setLoadingCutoff(cutoff);
                 bag.setQueuedSince(queuedSince);
                 if (createdAt != null) bag.setCreatedAt(createdAt);
                 if (updatedAt != null) bag.setUpdatedAt(updatedAt);
@@ -442,6 +419,7 @@ public class DatabaseManager {
                 if (destNode != null && !destNode.isEmpty()) {
                     bag.setDestinationNode(destNode);
                 }
+                bag.setLoadingCutoff(cutoff);
                 bag.setClearance(cleared, clearanceReason);
                 bag.setStatus(BaggageStatus.fromString(statusStr));
 
@@ -517,6 +495,22 @@ public class DatabaseManager {
             RedisCache.invalidateFlights();
         } catch (SQLException e) {
             System.err.println("Error saving loading bay: " + e.getMessage());
+        }
+    }
+
+    public static void loadLoadingBays(BaggageService service) {
+        String sql = "SELECT * FROM LoadingBay";
+        try (Connection conn = connect(); Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
+            while (rs.next()) {
+                String bayId = rs.getString("bayId");
+                LoadingBay bay = service.getBay(bayId);
+                if (bay == null) {
+                    bay = new LoadingBay(bayId);
+                    service.getAllBays().put(bayId, bay);
+                }
+            }
+        } catch (SQLException e) {
+            System.err.println("Error loading loading bays: " + e.getMessage());
         }
     }
 
@@ -664,6 +658,7 @@ public class DatabaseManager {
             System.err.println("Clean reset error: " + e.getMessage());
         }
         initializeDatabase();
+        seedInitialDataIfEmpty(null);
         RedisCache.invalidateAll();
     }
 
@@ -725,10 +720,228 @@ public class DatabaseManager {
         return repairedCount;
     }
 
-    public static void syncBaggageFromDatabase(BaggageService service) {
-        if (service == null) return;
-        RedisCache.invalidateAllBaggageTracks();
-        service.getAllBaggage().clear();
-        loadBaggage(service);
+    public static void seedInitialDataIfEmpty() {
+        seedInitialDataIfEmpty(null);
+    }
+
+    public static void seedInitialDataIfEmpty(BaggageService service) {
+        boolean needFlights = !hasData("Flight");
+        boolean needBays = !hasData("LoadingBay");
+        boolean needConveyors = !hasData("ConveyorSegment");
+        boolean needPassengers = !hasData("Passenger");
+        boolean needUsers = !hasData("Users");
+        boolean needBaggage = !hasData("Baggage");
+
+        if (!needFlights && !needBays && !needConveyors && !needPassengers && !needUsers && !needBaggage) {
+            return; // Data already exists; do not overwrite or reset operational changes
+        }
+
+        try (Connection conn = connect()) {
+            if (conn == null) return;
+            conn.setAutoCommit(false);
+
+            // 1. Conveyor Network Segments (Weighted Directed Graph Topology)
+            if (needConveyors) {
+                String[][] segments = {
+                    {"CHECK-IN", "SORTING", "4"},
+                    {"SORTING", "TRANSFER-A", "5"},
+                    {"SORTING", "TRANSFER-B", "6"},
+                    {"SORTING", "CENTRAL", "7"},
+                    {"TRANSFER-A", "CENTRAL", "4"},
+                    {"TRANSFER-B", "CENTRAL", "3"},
+                    {"CENTRAL", "BAY-AREA", "5"},
+                    {"BAY-AREA", "BAY-A", "3"},
+                    {"BAY-AREA", "BAY-B", "4"},
+                    {"BAY-AREA", "BAY-C", "3"},
+                    {"BAY-AREA", "BAY-D", "5"},
+                    {"UNLOAD-POINT", "CENTRAL", "5"},
+                    {"CENTRAL", "CLAIM-AREA", "4"},
+                    {"CLAIM-AREA", "CLAIM-CAROUSEL-1", "3"},
+                    {"CLAIM-AREA", "CLAIM-CAROUSEL-2", "4"},
+                    {"UNLOAD-POINT", "TRANSFER-A", "6"}
+                };
+                String segSql = "INSERT OR IGNORE INTO ConveyorSegment (fromNode, toNode, processingTime, available) VALUES(?,?,?,1)";
+                try (PreparedStatement pstmt = conn.prepareStatement(segSql)) {
+                    for (String[] s : segments) {
+                        pstmt.setString(1, s[0]);
+                        pstmt.setString(2, s[1]);
+                        pstmt.setInt(3, Integer.parseInt(s[2]));
+                        pstmt.executeUpdate();
+                    }
+                }
+            }
+
+            // 2. Loading Bays
+            if (needBays) {
+                String[][] bays = {
+                    {"BAY-A", "AI101"},
+                    {"BAY-B", "6E202"},
+                    {"BAY-C", "SG303"},
+                    {"BAY-D", "UK404"}
+                };
+                String baySql = "INSERT OR IGNORE INTO LoadingBay (bayId, assignedFlight) VALUES(?,?)";
+                try (PreparedStatement pstmt = conn.prepareStatement(baySql)) {
+                    for (String[] b : bays) {
+                        pstmt.setString(1, b[0]);
+                        pstmt.setString(2, b[1]);
+                        pstmt.executeUpdate();
+                    }
+                }
+            }
+
+            // 3. Flights
+            if (needFlights) {
+                String[][] flights = {
+                    {"AI101", "MAA", "Delhi (DEL) via Madurai (IXM)", "660", "630", "BAY-A"},
+                    {"6E202", "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "645", "615", "BAY-B"},
+                    {"SG303", "MAA", "Bengaluru (BLR) / Tiruchirappalli (TRZ)", "675", "645", "BAY-C"},
+                    {"UK404", "MAA", "Dubai (DXB) / Singapore (SIN)", "650", "620", "BAY-D"}
+                };
+                String flSql = "INSERT OR IGNORE INTO Flight (flightId, origin, destination, departureTime, loadingCutoff, assignedBay) VALUES(?,?,?,?,?,?)";
+                try (PreparedStatement pstmt = conn.prepareStatement(flSql)) {
+                    for (String[] f : flights) {
+                        pstmt.setString(1, f[0]);
+                        pstmt.setString(2, f[1]);
+                        pstmt.setString(3, f[2]);
+                        pstmt.setInt(4, Integer.parseInt(f[3]));
+                        pstmt.setInt(5, Integer.parseInt(f[4]));
+                        pstmt.setString(6, f[5]);
+                        pstmt.executeUpdate();
+                    }
+                }
+            }
+
+            // 4. Passengers
+            if (needPassengers) {
+                String[][] passengers = {
+                    {"P101", "Ramesh Kumar", "ramesh", "AI101", "2", "ramesh.k@example.com"},
+                    {"P102", "Priya Sharma", "priya", "6E202", "1", "priya.s@example.com"},
+                    {"P103", "Rajesh Patel", "rajesh", "SG303", "3", "rajesh.p@example.com"},
+                    {"P104", "Ananya Iyer", "ananya", "UK404", "2", "ananya.i@example.com"},
+                    {"P105", "Vikram Singh", "vikram", "AI101", "3", "vikram.s@example.com"},
+                    {"P106", "Meera Nair", "meera", "6E202", "3", "meera.n@example.com"},
+                    {"P107", "Arun Verma", "arun", "SG303", "2", "arun.v@example.com"},
+                    {"P108", "Sneha Reddy", "sneha", "UK404", "1", "sneha.r@example.com"},
+                    {"P109", "Karthik Raman", "karthik", "AI101", "3", "karthik.r@example.com"},
+                    {"P110", "Divya Krishnan", "divya", "6E202", "3", "divya.k@example.com"},
+                    {"P111", "David Miller", "david", "AI101", "2", "david.m@example.com"},
+                    {"P112", "Fatima Al-Sayed", "fatima", "UK404", "1", "fatima.a@example.com"}
+                };
+                String pSql = "INSERT OR IGNORE INTO Passenger (passengerId, fullName, username, flightId, categoryRank, contactInfo) VALUES(?,?,?,?,?,?)";
+                try (PreparedStatement pstmt = conn.prepareStatement(pSql)) {
+                    for (String[] p : passengers) {
+                        pstmt.setString(1, p[0]);
+                        pstmt.setString(2, p[1]);
+                        pstmt.setString(3, p[2]);
+                        pstmt.setString(4, p[3]);
+                        pstmt.setInt(5, Integer.parseInt(p[4]));
+                        pstmt.setString(6, p[5]);
+                        pstmt.executeUpdate();
+                    }
+                }
+            }
+
+            // 5. User Accounts
+            if (needUsers) {
+                String[][] users = {
+                    {"admin", "admin123", "ADMIN", "0", null},
+                    {"manager", "manager123", "BAGGAGE_MANAGER", "1", null},
+                    {"ramesh", "pass123", "PASSENGER", "0", "P101"},
+                    {"priya", "pass123", "PASSENGER", "0", "P102"},
+                    {"rajesh", "pass123", "PASSENGER", "0", "P103"},
+                    {"ananya", "pass123", "PASSENGER", "0", "P104"},
+                    {"vikram", "pass123", "PASSENGER", "0", "P105"},
+                    {"meera", "pass123", "PASSENGER", "0", "P106"},
+                    {"arun", "pass123", "PASSENGER", "0", "P107"},
+                    {"sneha", "pass123", "PASSENGER", "0", "P108"},
+                    {"karthik", "pass123", "PASSENGER", "0", "P109"},
+                    {"divya", "pass123", "PASSENGER", "0", "P110"},
+                    {"david", "pass123", "PASSENGER", "0", "P111"},
+                    {"fatima", "pass123", "PASSENGER", "0", "P112"}
+                };
+                String uSql = "INSERT OR IGNORE INTO Users (username, passwordHash, passwordSalt, role, clearanceAuthority, active, linkedPassengerId) VALUES(?,?,?,?,?,1,?)";
+                try (PreparedStatement pstmt = conn.prepareStatement(uSql)) {
+                    for (String[] u : users) {
+                        String[] hs = AuthManager.hashPassword(u[1]);
+                        pstmt.setString(1, u[0]);
+                        pstmt.setString(2, hs[0]);
+                        pstmt.setString(3, hs[1]);
+                        pstmt.setString(4, u[2]);
+                        pstmt.setInt(5, Integer.parseInt(u[3]));
+                        pstmt.setString(6, u[4]);
+                        pstmt.executeUpdate();
+                    }
+                }
+            }
+
+            // 6. Synthetic Baggage Dataset (32 unique records)
+            if (needBaggage) {
+                Object[][] bags = {
+                    {"BAG-101", "P101", "Ramesh Kumar", "Outgoing", "OUTGOING", "AI101", 2, 1, "MAA", "Delhi (DEL) via Madurai (IXM)", "CHECK-IN", "BAY-A", 630, 0, "", "AWAITING_CLEARANCE", 19, 540},
+                    {"BAG-102", "P101", "Ramesh Kumar", "Outgoing", "OUTGOING", "AI101", 2, 2, "MAA", "Delhi (DEL) via Madurai (IXM)", "CHECK-IN", "BAY-A", 630, 1, "Screening cleared (Security Hub)", "QUEUED", 19, 535},
+                    {"BAG-122", "P101", "Ramesh Kumar", "Outgoing", "OUTGOING", "AI101", 2, 3, "MAA", "Delhi (DEL) via Madurai (IXM)", "BAY-A", "BAY-A", 630, 1, "Screening cleared", "LOADED", 0, 530},
+                    {"BAG-131", "P101", "Ramesh Kumar", "Outgoing", "OUTGOING", "AI101", 2, 4, "MAA", "Delhi (DEL) via Madurai (IXM)", "SORTING", "BAY-A", 630, 1, "Screening cleared", "IN_TRANSIT", 15, 540},
+                    {"BAG-103", "P102", "Priya Sharma", "Outgoing", "OUTGOING", "6E202", 1, 5, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "CENTRAL", "BAY-B", 615, 1, "Priority screening cleared", "IN_TRANSIT", 9, 535},
+                    {"BAG-104", "P102", "Priya Sharma", "Outgoing", "OUTGOING", "6E202", 1, 6, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "BAY-B", "BAY-B", 615, 1, "Priority screening cleared", "LOADED", 0, 530},
+                    {"BAG-123", "P102", "Priya Sharma", "Outgoing", "OUTGOING", "6E202", 1, 7, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "CHECK-IN", "BAY-B", 615, 1, "Priority screening cleared", "QUEUED", 20, 525},
+                    {"BAG-105", "P103", "Rajesh Patel", "Outgoing", "OUTGOING", "SG303", 3, 8, "MAA", "Bengaluru (BLR) / Tiruchirappalli (TRZ)", "CHECK-IN", "BAY-C", 645, 0, "", "AWAITING_CLEARANCE", 19, 540},
+                    {"BAG-120", "P103", "Rajesh Patel", "Outgoing", "OUTGOING", "6E202", 3, 9, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "CHECK-IN", "BAY-B", 530, 1, "Screening cleared", "MISSED_CUTOFF", 20, 535},
+                    {"BAG-106", "P104", "Ananya Iyer", "Outgoing", "OUTGOING", "UK404", 2, 10, "MAA", "Dubai (DXB) / Singapore (SIN)", "CHECK-IN", "BAY-D", 620, 1, "Screening verified", "QUEUED", 21, 530},
+                    {"BAG-124", "P104", "Ananya Iyer", "Outgoing", "OUTGOING", "UK404", 2, 11, "MAA", "Dubai (DXB) / Singapore (SIN)", "BAY-D", "BAY-D", 620, 1, "Screening verified", "LOADED", 0, 525},
+                    {"BAG-132", "P104", "Ananya Iyer", "Outgoing", "OUTGOING", "UK404", 2, 12, "MAA", "Dubai (DXB) / Singapore (SIN)", "CHECK-IN", "BAY-D", 620, 0, "", "AWAITING_CLEARANCE", 21, 540},
+                    {"BAG-107", "P105", "Vikram Singh", "Outgoing", "OUTGOING", "AI101", 3, 13, "MAA", "Delhi (DEL) via Madurai (IXM)", "CHECK-IN", "BAY-A", 630, 1, "Screening verified", "QUEUED", 19, 535},
+                    {"BAG-116", "P105", "Vikram Singh", "Incoming", "INCOMING", null, 3, 14, "DXB", "MAA", "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-1", 0, 1, "Inbound flight baggage", "AT_COLLECTION_POINT", 0, 530},
+                    {"BAG-125", "P105", "Vikram Singh", "Outgoing", "OUTGOING", "AI101", 3, 15, "MAA", "Delhi (DEL) via Madurai (IXM)", "BAY-AREA", "BAY-A", 630, 1, "Screening verified", "IN_TRANSIT", 3, 525},
+                    {"BAG-108", "P106", "Meera Nair", "Outgoing", "OUTGOING", "6E202", 3, 16, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "CHECK-IN", "BAY-B", 615, 0, "", "AWAITING_CLEARANCE", 20, 540},
+                    {"BAG-117", "P106", "Meera Nair", "Incoming", "INCOMING", null, 3, 17, "DXB", "MAA", "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-1", 0, 1, "Inbound flight baggage", "COLLECTED", 0, 535},
+                    {"BAG-109", "P107", "Arun Verma", "Outgoing", "OUTGOING", "SG303", 2, 18, "MAA", "Bengaluru (BLR) / Tiruchirappalli (TRZ)", "BAY-AREA", "BAY-C", 645, 1, "Screening cleared", "IN_TRANSIT", 3, 530},
+                    {"BAG-118", "P107", "Arun Verma", "Transfer", "TRANSFER", "AI101", 2, 19, "DEL", "Delhi (DEL) via Madurai (IXM)", "TRANSFER-A", "BAY-A", 630, 1, "Transit security approved", "QUEUED", 12, 525},
+                    {"BAG-110", "P108", "Sneha Reddy", "Outgoing", "OUTGOING", "UK404", 1, 20, "MAA", "Dubai (DXB) / Singapore (SIN)", "CHECK-IN", "BAY-D", 620, 1, "VIP screening cleared", "QUEUED", 21, 540},
+                    {"BAG-111", "P108", "Sneha Reddy", "Outgoing", "OUTGOING", "UK404", 1, 21, "MAA", "Dubai (DXB) / Singapore (SIN)", "BAY-D", "BAY-D", 620, 1, "VIP screening cleared", "LOADED", 0, 535},
+                    {"BAG-126", "P108", "Sneha Reddy", "Outgoing", "OUTGOING", "UK404", 1, 22, "MAA", "Dubai (DXB) / Singapore (SIN)", "CENTRAL", "BAY-D", 620, 1, "VIP screening cleared", "IN_TRANSIT", 10, 530},
+                    {"BAG-112", "P109", "Karthik Raman", "Outgoing", "OUTGOING", "AI101", 3, 23, "MAA", "Delhi (DEL) via Madurai (IXM)", "CHECK-IN", "BAY-A", 630, 0, "", "AWAITING_CLEARANCE", 19, 525},
+                    {"BAG-121", "P109", "Karthik Raman", "Outgoing", "OUTGOING", "SG303", 3, 24, "MAA", "Bengaluru (BLR) / Tiruchirappalli (TRZ)", "CHECK-IN", "BAY-C", 645, 0, "Prohibited lithium battery pack detected in X-ray screening", "REJECTED", 19, 540},
+                    {"BAG-127", "P109", "Karthik Raman", "Outgoing", "OUTGOING", "AI101", 3, 25, "MAA", "Delhi (DEL) via Madurai (IXM)", "CHECK-IN", "BAY-A", 630, 1, "Screening cleared", "QUEUED", 19, 535},
+                    {"BAG-113", "P110", "Divya Krishnan", "Outgoing", "OUTGOING", "6E202", 3, 26, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "BAY-B", "BAY-B", 615, 1, "Screening cleared", "LOADED", 0, 530},
+                    {"BAG-128", "P110", "Divya Krishnan", "Outgoing", "OUTGOING", "6E202", 3, 27, "MAA", "Mumbai (BOM) via Coimbatore (CJB)", "CHECK-IN", "BAY-B", 615, 1, "Screening cleared", "QUEUED", 20, 525},
+                    {"BAG-114", "P111", "David Miller", "Incoming", "INCOMING", null, 2, 28, "DXB", "MAA", "UNLOAD-POINT", "CLAIM-CAROUSEL-1", 0, 1, "Inbound flight baggage", "QUEUED", 12, 540},
+                    {"BAG-119", "P111", "David Miller", "Incoming", "INCOMING", null, 2, 29, "DXB", "MAA", "CENTRAL", "CLAIM-CAROUSEL-2", 0, 1, "Inbound flight baggage", "IN_TRANSIT", 8, 535},
+                    {"BAG-129", "P111", "David Miller", "Incoming", "INCOMING", null, 2, 30, "DXB", "MAA", "CLAIM-CAROUSEL-1", "CLAIM-CAROUSEL-1", 0, 1, "Inbound flight baggage", "AT_COLLECTION_POINT", 0, 530},
+                    {"BAG-115", "P112", "Fatima Al-Sayed", "Transfer", "TRANSFER", "UK404", 1, 31, "DEL", "Dubai (DXB) / Singapore (SIN)", "TRANSFER-A", "BAY-D", 620, 1, "Transit security approved", "QUEUED", 14, 525},
+                    {"BAG-130", "P112", "Fatima Al-Sayed", "Transfer", "TRANSFER", "UK404", 1, 32, "DEL", "Dubai (DXB) / Singapore (SIN)", "BAY-D", "BAY-D", 620, 1, "Transit security approved", "LOADED", 0, 540}
+                };
+                String bSql = "INSERT OR IGNORE INTO Baggage (bagId, passengerId, passengerName, bagType, direction, flightId, categoryRank, arrivalOrder, originAirport, destinationAirport, currentLocation, destinationNode, loadingCutoff, operatorClearance, clearanceReason, status, estimatedTime, queuedSince, createdAt, updatedAt) "
+                        + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, datetime('now'), datetime('now'))";
+                try (PreparedStatement pstmt = conn.prepareStatement(bSql)) {
+                    for (Object[] b : bags) {
+                        pstmt.setString(1, (String) b[0]);
+                        pstmt.setString(2, (String) b[1]);
+                        pstmt.setString(3, (String) b[2]);
+                        pstmt.setString(4, (String) b[3]);
+                        pstmt.setString(5, (String) b[4]);
+                        pstmt.setString(6, (String) b[5]);
+                        pstmt.setInt(7, (Integer) b[6]);
+                        pstmt.setInt(8, (Integer) b[7]);
+                        pstmt.setString(9, (String) b[8]);
+                        pstmt.setString(10, (String) b[9]);
+                        pstmt.setString(11, (String) b[10]);
+                        pstmt.setString(12, (String) b[11]);
+                        pstmt.setInt(13, (Integer) b[12]);
+                        pstmt.setInt(14, (Integer) b[13]);
+                        pstmt.setString(15, (String) b[14]);
+                        pstmt.setString(16, (String) b[15]);
+                        pstmt.setInt(17, (Integer) b[16]);
+                        pstmt.setInt(18, (Integer) b[17]);
+                        pstmt.executeUpdate();
+                    }
+                }
+            }
+
+            conn.commit();
+            logAudit("SYSTEM", "INITIALIZE_SEED_DATA", "System", 540, "SUCCESS", "Pristine demonstration dataset seeded into SQLite");
+            RedisCache.invalidateAll();
+        } catch (SQLException e) {
+            System.err.println("Error seeding database: " + e.getMessage());
+        }
     }
 }
